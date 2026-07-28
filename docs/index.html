@@ -60,7 +60,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 </div>
 <div class="stats">
 <div class="stat"><div class="num">5</div><div class="label">Rust crates</div></div>
-<div class="stat"><div class="num">24</div><div class="label">CLI commands</div></div>
+<div class="stat"><div class="num">29</div><div class="label">CLI commands</div></div>
 <div class="stat"><div class="num">3</div><div class="label">Platforms</div></div>
 <div class="stat"><div class="num">∞</div><div class="label">Features tracked</div></div>
 </div>
@@ -75,7 +75,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <h3>🔀 Git-Native Version Control</h3>
 <ul>
 <li>Real Git repository under the hood</li>
-<li>Branching, merging, rebasing — all standard Git</li>
+<li>Branching and merging on a real Git repository</li>
 <li>Works with GitHub, GitLab, any Git remote</li>
 <li>Full commit history with feature-level diffs</li>
 <li>Three-way merge with conflict detection</li>
@@ -104,11 +104,11 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <div class="card">
 <h3>🔄 Full Git Workflow</h3>
 <ul>
-<li><code>geogit push</code> / <code>pull</code> to remotes</li>
-<li><code>geogit clone</code> remote repositories</li>
-<li><code>geogit merge</code> with conflict reporting</li>
-<li><code>geogit resolve --theirs/--ours</code></li>
-<li><code>geogit remote add/remove/ls</code></li>
+<li><code>ggt push</code> / <code>pull</code> to remotes</li>
+<li><code>ggt clone</code> remote repositories</li>
+<li><code>ggt merge</code> with conflict reporting</li>
+<li><code>ggt resolve --theirs/--ours</code></li>
+<li><code>ggt remote add/remove/ls</code></li>
 </ul>
 </div>
 <div class="card">
@@ -135,7 +135,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <h3>📁 File & Document Support</h3>
 <ul>
 <li>Version arbitrary files alongside datasets</li>
-<li><code>geogit files add/ls/rm</code> commands</li>
+<li><code>ggt files add/ls/rm</code> commands</li>
 <li>Organize into named file datasets</li>
 <li>Full Git history for every file</li>
 <li>Metadata and license per file dataset</li>
@@ -147,8 +147,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <li>Attach XML metadata (ISO 19115, FGDC)</li>
 <li>License tracking per dataset</li>
 <li>Version-controlled alongside data</li>
-<li><code>geogit metadata set/show</code></li>
-<li><code>geogit license set/show</code></li>
+<li><code>ggt metadata set/show</code></li>
+<li><code>ggt license set/show</code></li>
 </ul>
 </div>
 </div>
@@ -162,32 +162,32 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 cargo install --path crates/geogit-cli
 
 # Initialize a new repository
-geogit init my-project
+ggt init my-project
 cd my-project
 
 # Import a GeoPackage
-geogit import GPKG:~/data/parcels.gpkg
+ggt import GPKG:~/data/parcels.gpkg
 
 # Create initial commit
-geogit commit -m "Import parcels dataset"
+ggt commit -m "Import parcels dataset"
 
 # Create a branch for edits
-geogit branch feature/update-zoning
-geogit switch feature/update-zoning
+ggt branch feature/update-zoning
+ggt switch feature/update-zoning
 
 # Edit data in QGIS (open the .gpkg file)
 # Then check what changed:
-geogit diff
-geogit status
+ggt diff
+ggt status
 
 # Commit and merge
-geogit commit -m "Update zoning classification"
-geogit switch master
-geogit merge feature/update-zoning
+ggt commit -m "Update zoning classification"
+ggt switch master
+ggt merge feature/update-zoning
 
 # Push to remote
-geogit remote add origin git@github.com:org/geodata.git
-geogit push origin master</pre>
+ggt remote add origin git@github.com:org/geodata.git
+ggt push origin master</pre>
 </div>
 </section>
 
@@ -199,30 +199,35 @@ geogit push origin master</pre>
 <tr><th>Command</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>geogit init [dir]</code></td><td>Initialize a new GeoGit repository</td></tr>
-<tr><td><code>geogit clone &lt;url&gt;</code></td><td>Clone a remote repository</td></tr>
-<tr><td><code>geogit import GPKG:file.gpkg</code></td><td>Import a GeoPackage dataset</td></tr>
-<tr><td><code>geogit status</code></td><td>Show working copy changes</td></tr>
-<tr><td><code>geogit diff [base] [target]</code></td><td>Feature-level diffs</td></tr>
-<tr><td><code>geogit commit -m "msg"</code></td><td>Commit working copy changes</td></tr>
-<tr><td><code>geogit log [--oneline] [-n N]</code></td><td>Show commit history</td></tr>
-<tr><td><code>geogit show [commit]</code></td><td>Display commit details</td></tr>
-<tr><td><code>geogit branch [name] [-d]</code></td><td>List/create/delete branches</td></tr>
-<tr><td><code>geogit switch &lt;branch&gt; [-c]</code></td><td>Switch branches</td></tr>
-<tr><td><code>geogit merge &lt;branch&gt; [--abort]</code></td><td>Merge a branch</td></tr>
-<tr><td><code>geogit push [remote] [branch]</code></td><td>Push to a remote</td></tr>
-<tr><td><code>geogit pull [remote] [branch]</code></td><td>Pull from a remote</td></tr>
-<tr><td><code>geogit remote add|remove|ls</code></td><td>Manage remotes</td></tr>
-<tr><td><code>geogit reset [target]</code></td><td>Reset working copy to commit</td></tr>
-<tr><td><code>geogit restore &lt;datasets&gt;</code></td><td>Restore datasets from a commit</td></tr>
-<tr><td><code>geogit checkout [datasets]</code></td><td>Checkout tree to working copy</td></tr>
-<tr><td><code>geogit conflicts [ls|abort]</code></td><td>View/manage merge conflicts</td></tr>
-<tr><td><code>geogit resolve [paths]</code></td><td>Resolve conflicts</td></tr>
-<tr><td><code>geogit export &lt;ds&gt; &lt;path&gt;</code></td><td>Export to GPKG/GeoJSON/CSV</td></tr>
-<tr><td><code>geogit data ls|info|schema</code></td><td>Inspect datasets</td></tr>
-<tr><td><code>geogit files add|ls|rm</code></td><td>Manage versioned files</td></tr>
-<tr><td><code>geogit metadata set|show</code></td><td>Dataset XML metadata</td></tr>
-<tr><td><code>geogit license set|show</code></td><td>Dataset license management</td></tr>
+<tr><td><code>ggt init [dir]</code></td><td>Initialize a new GeoGit repository</td></tr>
+<tr><td><code>ggt clone &lt;url&gt;</code></td><td>Clone a remote repository</td></tr>
+<tr><td><code>ggt import GPKG:file.gpkg</code></td><td>Import a GeoPackage dataset</td></tr>
+<tr><td><code>ggt status</code></td><td>Show working copy changes</td></tr>
+<tr><td><code>ggt diff [base] [target]</code></td><td>Feature-level diffs</td></tr>
+<tr><td><code>ggt commit -m "msg"</code></td><td>Commit working copy changes</td></tr>
+<tr><td><code>ggt log [--oneline] [-n N]</code></td><td>Show commit history</td></tr>
+<tr><td><code>ggt show [commit]</code></td><td>Display commit details</td></tr>
+<tr><td><code>ggt branch [name] [-d]</code></td><td>List/create/delete branches</td></tr>
+<tr><td><code>ggt switch &lt;branch&gt; [-c]</code></td><td>Switch branches</td></tr>
+<tr><td><code>ggt merge &lt;branch&gt; [--abort]</code></td><td>Merge a branch</td></tr>
+<tr><td><code>ggt push [remote] [branch]</code></td><td>Push to a remote</td></tr>
+<tr><td><code>ggt pull [remote] [branch]</code></td><td>Pull from a remote</td></tr>
+<tr><td><code>ggt remote add|remove|ls</code></td><td>Manage remotes</td></tr>
+<tr><td><code>ggt reset [target]</code></td><td>Reset working copy to commit</td></tr>
+<tr><td><code>ggt restore &lt;datasets&gt;</code></td><td>Restore datasets from a commit</td></tr>
+<tr><td><code>ggt checkout [datasets]</code></td><td>Checkout tree to working copy</td></tr>
+<tr><td><code>ggt conflicts [ls|abort]</code></td><td>View/manage merge conflicts</td></tr>
+<tr><td><code>ggt resolve [paths]</code></td><td>Resolve conflicts</td></tr>
+<tr><td><code>ggt export &lt;ds&gt; &lt;path&gt;</code></td><td>Export to GPKG/GeoJSON/CSV</td></tr>
+<tr><td><code>ggt data ls|info|schema</code></td><td>Inspect datasets</td></tr>
+<tr><td><code>ggt files add|ls|rm</code></td><td>Manage versioned files</td></tr>
+<tr><td><code>ggt metadata set|show</code></td><td>Dataset XML metadata</td></tr>
+<tr><td><code>ggt license set|show</code></td><td>Dataset license management</td></tr>
+<tr><td><code>ggt pointcloud import|ls|info</code></td><td>Point cloud datasets (LAS/LAZ)</td></tr>
+<tr><td><code>ggt raster import|ls|info</code></td><td>Raster datasets (GeoTIFF)</td></tr>
+<tr><td><code>ggt create-workingcopy &lt;target&gt;</code></td><td>Create a working copy at a path or PostGIS URL</td></tr>
+<tr><td><code>ggt lfs ls-files|fetch|gc</code></td><td>Manage Git LFS objects</td></tr>
+<tr><td><code>ggt version</code></td><td>Show version information</td></tr>
 </tbody>
 </table>
 </div>
@@ -329,7 +334,7 @@ geogit push origin master</pre>
 git clone https://github.com/GeoLang/geogit.git
 cd geogit
 cargo build --release
-# Binary at target/release/geogit</pre>
+# Binary at target/release/ggt</pre>
 </div>
 </section>
 
