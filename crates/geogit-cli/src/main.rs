@@ -716,11 +716,8 @@ fn feature_in_bbox(
 /// Extract the first (x, y) coordinate from a WKT string.
 fn extract_first_coord(wkt: &str) -> Option<(f64, f64)> {
     // Find the first opening paren or "POINT " prefix
-    let coord_str = if let Some(pos) = wkt.find('(') {
-        &wkt[pos + 1..]
-    } else {
-        return None;
-    };
+    let pos = wkt.find('(')?;
+    let coord_str = &wkt[pos + 1..];
     // Get first coordinate pair before ) or ,
     let end = coord_str.find([',', ')'])?;
     let pair = &coord_str[..end];
