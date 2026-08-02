@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 
 use geogit_core::dataset::DatasetMeta;
@@ -121,6 +121,58 @@ impl GeoPackageWorkingCopy {
             DataType::Timestamp => "DATETIME",
         }
     }
+
+    /// Name of the table's primary key column.
+    fn pk_column(&self, table_name: &str) -> Result<String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info(\"{table_name}\")"))?;
+        let mut rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+        })?;
+        match rows.find_map(|r| match r {
+            Ok((name, pk)) if pk != 0 => Some(Ok(name)),
+            Ok(_) => None,
+            Err(e) => Some(Err(e)),
+        }) {
+            Some(name) => Ok(name?),
+            None => bail!("table {table_name} has no primary key column"),
+        }
+    }
+
+    /// Read one row by its primary key, as it appears in the working copy.
+    fn read_row(
+        &self,
+        table_name: &str,
+        pk_column: &str,
+        pk: &str,
+    ) -> Result<Option<HashMap<String, ColumnValue>>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT * FROM \"{table_name}\" WHERE CAST(\"{pk_column}\" AS TEXT) = ?1"
+        ))?;
+        let names: Vec<String> = stmt.column_names().iter().map(|n| n.to_string()).collect();
+        let mut rows = stmt.query([pk])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let mut values = HashMap::with_capacity(names.len());
+        for (i, name) in names.iter().enumerate() {
+            values.insert(name.clone(), read_sqlite_value(row, i)?);
+        }
+        Ok(Some(values))
+    }
+}
+
+/// Convert a SQLite cell to a `ColumnValue`.
+pub fn read_sqlite_value(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<ColumnValue> {
+    use rusqlite::types::ValueRef;
+    Ok(match row.get_ref(idx)? {
+        ValueRef::Null => ColumnValue::Null,
+        ValueRef::Integer(v) => ColumnValue::Integer(v),
+        ValueRef::Real(v) => ColumnValue::Float(v),
+        ValueRef::Text(v) => ColumnValue::Text(String::from_utf8_lossy(v).to_string()),
+        ValueRef::Blob(v) => ColumnValue::Blob(v.to_vec()),
+    })
 }
 
 impl WorkingCopy for GeoPackageWorkingCopy {
@@ -247,30 +299,48 @@ impl WorkingCopy for GeoPackageWorkingCopy {
     fn status(&self, dataset_path: &str) -> Result<Vec<FeatureDelta>> {
         let table_name = dataset_path.replace('/', "_");
         let changes = self.tracker.get_changes(&self.conn, &table_name)?;
+        if changes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pk_column = self.pk_column(&table_name)?;
 
         let mut deltas = Vec::new();
         for change in changes {
-            let pk = vec![ColumnValue::Text(change.pk.clone())];
+            let new = self.read_row(&table_name, &pk_column, &change.pk)?;
+            let old = self
+                .tracker
+                .old_values(&self.conn, &table_name, &change.pk)?;
+            let pk = vec![
+                new.as_ref()
+                    .and_then(|row| row.get(&pk_column))
+                    .or_else(|| old.get(&pk_column))
+                    .cloned()
+                    .unwrap_or(ColumnValue::Text(change.pk.clone())),
+            ];
             match change.change_type.as_str() {
                 "I" => {
                     deltas.push(FeatureDelta::Insert {
                         pk,
-                        new: HashMap::new(), // TODO: read from table
+                        new: new.unwrap_or_default(),
                     });
                 }
                 "U" => {
+                    let new = new.unwrap_or_default();
+                    let mut changed_columns: Vec<String> = new
+                        .iter()
+                        .filter(|(name, value)| old.get(*name) != Some(*value))
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    changed_columns.sort();
                     deltas.push(FeatureDelta::Update {
                         pk,
-                        old: HashMap::new(),
-                        new: HashMap::new(),
-                        changed_columns: vec![],
+                        old,
+                        new,
+                        changed_columns,
                     });
                 }
                 "D" => {
-                    deltas.push(FeatureDelta::Delete {
-                        pk,
-                        old: HashMap::new(),
-                    });
+                    deltas.push(FeatureDelta::Delete { pk, old });
                 }
                 _ => {}
             }
@@ -351,22 +421,8 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn test_gpkg_checkout_and_list() {
-        let dir = std::env::temp_dir().join(format!("geogit-gpkg-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let gpkg_path = dir.join("test.gpkg");
-
-        let mut wc = GeoPackageWorkingCopy::open(&gpkg_path).unwrap();
-        let meta = DatasetMeta {
-            title: "Cities".into(),
-            description: "World cities".into(),
-            schema: test_schema(),
-            path_structure: PathStructure::default(),
-        };
-
-        let features = vec![
+    fn test_features() -> Vec<(Vec<ColumnValue>, HashMap<String, ColumnValue>)> {
+        vec![
             (
                 vec![ColumnValue::Integer(1)],
                 HashMap::from([
@@ -383,9 +439,111 @@ mod tests {
                     ("population".into(), ColumnValue::Integer(11_034_555)),
                 ]),
             ),
-        ];
+        ]
+    }
 
-        wc.checkout("cities", &meta, &features).unwrap();
+    fn test_meta() -> DatasetMeta {
+        DatasetMeta {
+            title: "Cities".into(),
+            description: "World cities".into(),
+            schema: test_schema(),
+            path_structure: PathStructure::default(),
+        }
+    }
+
+    #[test]
+    fn test_status_reports_feature_values() {
+        let dir = std::env::temp_dir().join(format!("geogit-gpkg-status-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut wc = GeoPackageWorkingCopy::open(&dir.join("test.gpkg")).unwrap();
+        wc.checkout("cities", &test_meta(), &test_features())
+            .unwrap();
+
+        wc.conn
+            .execute_batch(
+                "INSERT INTO cities (fid, name, population) VALUES (3, 'Shanghai', 24870895);
+                 UPDATE cities SET population = 14000000 WHERE fid = 1;
+                 DELETE FROM cities WHERE fid = 2;",
+            )
+            .unwrap();
+
+        let changes = wc.status("cities").unwrap();
+        assert_eq!(changes.len(), 3);
+
+        match &changes[0] {
+            FeatureDelta::Insert { pk, new } => {
+                assert_eq!(pk, &[ColumnValue::Integer(3)]);
+                assert_eq!(new["name"], ColumnValue::Text("Shanghai".into()));
+                assert_eq!(new["population"], ColumnValue::Integer(24_870_895));
+            }
+            other => panic!("expected insert, got {other:?}"),
+        }
+
+        match &changes[1] {
+            FeatureDelta::Update {
+                pk,
+                old,
+                new,
+                changed_columns,
+            } => {
+                assert_eq!(pk, &[ColumnValue::Integer(1)]);
+                assert_eq!(old["population"], ColumnValue::Integer(13_960_000));
+                assert_eq!(new["population"], ColumnValue::Integer(14_000_000));
+                assert_eq!(old["name"], ColumnValue::Text("Tokyo".into()));
+                assert_eq!(changed_columns, &["population"]);
+            }
+            other => panic!("expected update, got {other:?}"),
+        }
+
+        match &changes[2] {
+            FeatureDelta::Delete { pk, old } => {
+                assert_eq!(pk, &[ColumnValue::Integer(2)]);
+                assert_eq!(old["name"], ColumnValue::Text("Delhi".into()));
+                assert_eq!(old["population"], ColumnValue::Integer(11_034_555));
+            }
+            other => panic!("expected delete, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_clear_tracking_drops_old_values() {
+        let dir = std::env::temp_dir().join(format!("geogit-gpkg-clear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut wc = GeoPackageWorkingCopy::open(&dir.join("test.gpkg")).unwrap();
+        wc.checkout("cities", &test_meta(), &test_features())
+            .unwrap();
+        wc.conn
+            .execute("DELETE FROM cities WHERE fid = 2", [])
+            .unwrap();
+        assert_eq!(wc.status("cities").unwrap().len(), 1);
+
+        wc.clear_tracking("cities").unwrap();
+        assert!(wc.status("cities").unwrap().is_empty());
+        let leftover: i64 = wc
+            .conn
+            .query_row("SELECT COUNT(*) FROM _geogit_track_old", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(leftover, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_gpkg_checkout_and_list() {
+        let dir = std::env::temp_dir().join(format!("geogit-gpkg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gpkg_path = dir.join("test.gpkg");
+
+        let mut wc = GeoPackageWorkingCopy::open(&gpkg_path).unwrap();
+        wc.checkout("cities", &test_meta(), &test_features())
+            .unwrap();
 
         // Verify datasets
         let datasets = wc.list_datasets().unwrap();

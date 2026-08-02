@@ -787,6 +787,53 @@ fn test_diff_working_copy() {
 }
 
 #[test]
+fn test_diff_working_copy_shows_values() {
+    let dir = tempdir("diff-wc-values");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["commit", "-m", "Initial"]);
+
+    // edit the working copy the way a GIS client would
+    let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    wc.execute_batch(
+        "UPDATE cities SET population = 14000000 WHERE fid = 1;
+         INSERT INTO cities (fid, name, population) VALUES (4, 'Osaka', 2750000);
+         DELETE FROM cities WHERE fid = 2;",
+    )
+    .unwrap();
+    drop(wc);
+
+    let (stdout, stderr, success) = run(&repo, &["diff"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("population: 13960000 → 14000000"),
+        "update values missing: {stdout}"
+    );
+    assert!(stdout.contains("Osaka"), "insert values missing: {stdout}");
+    assert!(stdout.contains("- 2"), "delete pk missing: {stdout}");
+
+    // committing the same changes must carry the values into the tree
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Edits"]);
+    assert!(success, "commit failed: {stderr}");
+    let csv_path = dir.path().join("out.csv");
+    let (_, stderr, success) = run(&repo, &["export", "cities", csv_path.to_str().unwrap()]);
+    assert!(success, "export failed: {stderr}");
+    let csv = fs::read_to_string(&csv_path).unwrap();
+    assert!(csv.contains("14000000"), "committed value missing: {csv}");
+    assert!(csv.contains("Osaka"), "committed insert missing: {csv}");
+    assert!(
+        !csv.contains("Delhi"),
+        "deleted feature still present: {csv}"
+    );
+}
+
+#[test]
 fn test_import_nonexistent_file() {
     let dir = tempdir("import-error");
     let repo = dir.path().join("repo");

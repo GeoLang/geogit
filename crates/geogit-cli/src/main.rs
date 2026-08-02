@@ -12,7 +12,7 @@ use geogit_encoding::schema::{Column, DataType, Schema};
 use geogit_encoding::value::ColumnValue;
 use geogit_git::Repository;
 use geogit_git::tree::TreeBuilder;
-use geogit_wc::gpkg::GeoPackageWorkingCopy;
+use geogit_wc::gpkg::{GeoPackageWorkingCopy, read_sqlite_value};
 use geogit_wc::traits::WorkingCopy;
 
 /// A feature row: primary key values + column name-value map.
@@ -57,9 +57,6 @@ enum Command {
         source: String,
         #[arg(long)]
         name: Option<String>,
-        /// Import all tables from the source
-        #[arg(long)]
-        all_tables: bool,
         /// Dataset name for raster/point-cloud tiles
         #[arg(long)]
         dataset: Option<String>,
@@ -389,7 +386,6 @@ fn main() -> Result<()> {
         Command::Import {
             source,
             name,
-            all_tables: _,
             dataset,
         } => cmd_import(&source, name.as_deref().or(dataset.as_deref())),
         Command::Status => cmd_status(),
@@ -899,17 +895,6 @@ fn read_gpkg_schema(conn: &rusqlite::Connection, table_name: &str) -> Result<Sch
         });
     }
     Ok(Schema(columns))
-}
-
-fn read_sqlite_value(row: &rusqlite::Row, idx: usize) -> Result<ColumnValue> {
-    use rusqlite::types::ValueRef;
-    match row.get_ref(idx)? {
-        ValueRef::Null => Ok(ColumnValue::Null),
-        ValueRef::Integer(v) => Ok(ColumnValue::Integer(v)),
-        ValueRef::Real(v) => Ok(ColumnValue::Float(v)),
-        ValueRef::Text(v) => Ok(ColumnValue::Text(String::from_utf8_lossy(v).to_string())),
-        ValueRef::Blob(v) => Ok(ColumnValue::Blob(v.to_vec())),
-    }
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
