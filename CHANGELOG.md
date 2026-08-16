@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-08-02
 
+### Changed
+
+- README command table names `ggt lfs+`, which is the clap name.
+
 ### Fixed
 
 - `ggt status` and `ggt diff` report the actual feature values of working copy

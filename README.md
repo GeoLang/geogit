@@ -165,7 +165,7 @@ myproject/
 | `ggt conflicts [ls\|abort]` | View/manage merge conflicts |
 | `ggt resolve [paths]` | Resolve conflicts |
 | `ggt create-workingcopy <target>` | Create a working copy at a path or PostGIS URL |
-| `ggt lfs ls-files\|fetch\|gc` | Manage Git LFS objects |
+| `ggt lfs+ ls-files\|fetch\|gc` | Manage Git LFS objects |
 | `ggt version` | Show version information |
 
 ## Building
