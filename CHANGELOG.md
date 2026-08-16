@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- 2026-08-15: docs drop "∞ features tracked".
 - README command table names `ggt lfs+`, which is the clap name.
 
 ### Fixed
