@@ -15,6 +15,7 @@ base64 = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 geo = { workspace = true }
+geozero = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

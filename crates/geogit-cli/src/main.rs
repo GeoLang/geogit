@@ -1129,6 +1129,103 @@ fn import_gpkg(gpkg_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn fmt_xy_list<I>(points: I) -> String
+where
+    I: IntoIterator<Item = (f64, f64)>,
+{
+    points
+        .into_iter()
+        .map(|(x, y)| format!("{x} {y}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn line_wkt<I, P>(parts: I) -> String
+where
+    I: IntoIterator<Item = P>,
+    P: IntoIterator<Item = (f64, f64)>,
+{
+    let rings: Vec<String> = parts
+        .into_iter()
+        .map(|part| format!("({})", fmt_xy_list(part)))
+        .collect();
+    if rings.len() == 1 {
+        format!("LINESTRING{}", rings[0])
+    } else {
+        format!("MULTILINESTRING({})", rings.join(","))
+    }
+}
+
+fn polygon_wkt<I, P>(rings: I) -> String
+where
+    I: IntoIterator<Item = P>,
+    P: IntoIterator<Item = (f64, f64)>,
+{
+    let parts: Vec<String> = rings
+        .into_iter()
+        .map(|ring| format!("({})", fmt_xy_list(ring)))
+        .collect();
+    format!("POLYGON({})", parts.join(","))
+}
+
+fn shape_to_wkt(shape: &shapefile::Shape) -> Option<String> {
+    Some(match shape {
+        shapefile::Shape::NullShape => return None,
+        shapefile::Shape::Point(p) => format!("POINT({} {})", p.x, p.y),
+        shapefile::Shape::PointM(p) => format!("POINT({} {})", p.x, p.y),
+        shapefile::Shape::PointZ(p) => format!("POINT({} {})", p.x, p.y),
+        shapefile::Shape::Polyline(p) => line_wkt(
+            p.parts()
+                .iter()
+                .map(|part| part.iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::PolylineM(p) => line_wkt(
+            p.parts()
+                .iter()
+                .map(|part| part.iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::PolylineZ(p) => line_wkt(
+            p.parts()
+                .iter()
+                .map(|part| part.iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::Polygon(p) => polygon_wkt(
+            p.rings()
+                .iter()
+                .map(|ring| ring.points().iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::PolygonM(p) => polygon_wkt(
+            p.rings()
+                .iter()
+                .map(|ring| ring.points().iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::PolygonZ(p) => polygon_wkt(
+            p.rings()
+                .iter()
+                .map(|ring| ring.points().iter().map(|pt| (pt.x, pt.y))),
+        ),
+        shapefile::Shape::Multipoint(p) => {
+            format!(
+                "MULTIPOINT({})",
+                fmt_xy_list(p.points().iter().map(|pt| (pt.x, pt.y)))
+            )
+        }
+        shapefile::Shape::MultipointM(p) => {
+            format!(
+                "MULTIPOINT({})",
+                fmt_xy_list(p.points().iter().map(|pt| (pt.x, pt.y)))
+            )
+        }
+        shapefile::Shape::MultipointZ(p) => {
+            format!(
+                "MULTIPOINT({})",
+                fmt_xy_list(p.points().iter().map(|pt| (pt.x, pt.y)))
+            )
+        }
+        shapefile::Shape::Multipatch(_) => return None,
+    })
+}
+
 fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     let shp_path = if shp_path.is_relative() {
         std::env::current_dir()?.join(shp_path)
@@ -1154,13 +1251,28 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     // Build schema from dBASE fields
     let mut columns = Vec::new();
 
-    // Add geometry column
+    let geometry_type = match reader.header().shape_type {
+        shapefile::ShapeType::Point
+        | shapefile::ShapeType::PointM
+        | shapefile::ShapeType::PointZ => "POINT",
+        shapefile::ShapeType::Polyline
+        | shapefile::ShapeType::PolylineM
+        | shapefile::ShapeType::PolylineZ => "MULTILINESTRING",
+        shapefile::ShapeType::Polygon
+        | shapefile::ShapeType::PolygonM
+        | shapefile::ShapeType::PolygonZ => "MULTIPOLYGON",
+        shapefile::ShapeType::Multipoint
+        | shapefile::ShapeType::MultipointM
+        | shapefile::ShapeType::MultipointZ => "MULTIPOINT",
+        _ => "GEOMETRY",
+    };
+
     columns.push(Column {
         id: uuid::Uuid::new_v4(),
         name: "geom".to_string(),
         data_type: DataType::Geometry,
         primary_key_index: None,
-        geometry_type: Some("GEOMETRY".to_string()),
+        geometry_type: Some(geometry_type.to_string()),
         geometry_crs: Some("EPSG:4326".to_string()),
         size: None,
         length: None,
@@ -1234,14 +1346,14 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     let mut wc_features = Vec::new();
 
     for (fid, result) in (1_i64..).zip(reader.iter_shapes_and_records()) {
-        let (_shape, record) = result.context("reading shapefile record")?;
+        let (shape, record) = result.context("reading shapefile record")?;
         let mut values = HashMap::new();
 
-        // Store geometry as placeholder (full WKB conversion would require geozero)
-        values.insert(
-            "geom".to_string(),
-            ColumnValue::Text("GEOMETRY".to_string()),
-        );
+        let geom_val = match shape_to_wkt(&shape) {
+            Some(wkt) => geogit_encoding::geometry::geometry_value_from_wkt(&wkt),
+            None => ColumnValue::Null,
+        };
+        values.insert("geom".to_string(), geom_val);
         values.insert("fid".to_string(), ColumnValue::Integer(fid));
 
         for (name, value) in record.into_iter() {
@@ -1287,6 +1399,92 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     );
     println!("Use `geogit commit -m \"Import {ds_name}\"` to commit.");
     Ok(())
+}
+
+trait TypedRow {
+    fn get_bool(&self, name: &str) -> Option<bool>;
+    fn get_i64(&self, name: &str) -> Option<i64>;
+    fn get_f64(&self, name: &str) -> Option<f64>;
+    fn get_text(&self, name: &str) -> Option<String>;
+    fn get_blob(&self, name: &str) -> Option<Vec<u8>>;
+}
+
+impl TypedRow for tokio_postgres::Row {
+    fn get_bool(&self, name: &str) -> Option<bool> {
+        self.try_get::<_, Option<bool>>(name).ok().flatten()
+    }
+
+    fn get_i64(&self, name: &str) -> Option<i64> {
+        self.try_get::<_, Option<i64>>(name)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.try_get::<_, Option<i32>>(name)
+                    .ok()
+                    .flatten()
+                    .map(i64::from)
+            })
+            .or_else(|| {
+                self.try_get::<_, Option<i16>>(name)
+                    .ok()
+                    .flatten()
+                    .map(i64::from)
+            })
+    }
+
+    fn get_f64(&self, name: &str) -> Option<f64> {
+        self.try_get::<_, Option<f64>>(name)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.try_get::<_, Option<f32>>(name)
+                    .ok()
+                    .flatten()
+                    .map(f64::from)
+            })
+    }
+
+    fn get_text(&self, name: &str) -> Option<String> {
+        self.try_get::<_, Option<String>>(name).ok().flatten()
+    }
+
+    fn get_blob(&self, name: &str) -> Option<Vec<u8>> {
+        self.try_get::<_, Option<Vec<u8>>>(name).ok().flatten()
+    }
+}
+
+fn read_typed_column(data_type: DataType, row: &impl TypedRow, name: &str) -> ColumnValue {
+    match data_type {
+        DataType::Boolean => row
+            .get_bool(name)
+            .map(ColumnValue::Bool)
+            .unwrap_or(ColumnValue::Null),
+        DataType::Integer => row
+            .get_i64(name)
+            .map(ColumnValue::Integer)
+            .unwrap_or(ColumnValue::Null),
+        DataType::Float | DataType::Numeric => row
+            .get_f64(name)
+            .map(ColumnValue::Float)
+            .unwrap_or(ColumnValue::Null),
+        DataType::Blob => row
+            .get_blob(name)
+            .map(ColumnValue::Blob)
+            .unwrap_or(ColumnValue::Null),
+        DataType::Geometry => row
+            .get_text(name)
+            .map(|wkt| geogit_encoding::geometry::geometry_value_from_wkt(&wkt))
+            .or_else(|| row.get_blob(name).map(ColumnValue::Blob))
+            .unwrap_or(ColumnValue::Null),
+        DataType::Date
+        | DataType::Time
+        | DataType::Timestamp
+        | DataType::Interval
+        | DataType::Text => row
+            .get_text(name)
+            .map(ColumnValue::Text)
+            .unwrap_or(ColumnValue::Null),
+    }
 }
 
 fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
@@ -1353,13 +1551,16 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
                 } else {
                     let dt = match pg_type {
                         "integer" | "bigint" | "smallint" => DataType::Integer,
-                        "real" | "double precision" | "numeric" => DataType::Float,
+                        "real" | "double precision" => DataType::Float,
+                        "numeric" => DataType::Numeric,
                         "boolean" => DataType::Boolean,
                         "bytea" => DataType::Blob,
                         "date" => DataType::Date,
+                        "time without time zone" | "time with time zone" => DataType::Time,
                         "timestamp without time zone" | "timestamp with time zone" => {
                             DataType::Timestamp
                         }
+                        "interval" => DataType::Interval,
                         _ => DataType::Text,
                     };
                     (dt, None, None, None)
@@ -1422,10 +1623,26 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
             let legend = Legend::new(non_pk_ids);
             let legend_hash = legend.hash();
 
-            // Fetch all rows
+            let select_list: Vec<String> = schema
+                .0
+                .iter()
+                .filter(|c| c.name != "_rowid")
+                .map(|c| match c.data_type {
+                    DataType::Geometry => {
+                        format!("ST_AsText(\"{}\") AS \"{}\"", c.name, c.name)
+                    }
+                    DataType::Date | DataType::Time | DataType::Timestamp | DataType::Interval => {
+                        format!("\"{}\"::text AS \"{}\"", c.name, c.name)
+                    }
+                    DataType::Numeric => {
+                        format!("\"{}\"::double precision AS \"{}\"", c.name, c.name)
+                    }
+                    _ => format!("\"{}\"", c.name),
+                })
+                .collect();
             let data_rows = client
                 .query(
-                    &format!("SELECT *, ST_AsText({geom_col}) as _geom_wkt FROM \"{table_name}\""),
+                    &format!("SELECT {} FROM \"{table_name}\"", select_list.join(", ")),
                     &[],
                 )
                 .await
@@ -1446,27 +1663,10 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
                     if col.name == "_rowid" {
                         continue;
                     }
-                    if col.name == geom_col {
-                        // Use WKT representation
-                        let wkt: Option<&str> = data_row.try_get("_geom_wkt").ok();
-                        values.insert(
-                            col.name.clone(),
-                            match wkt {
-                                Some(w) => ColumnValue::Text(w.to_string()),
-                                None => ColumnValue::Null,
-                            },
-                        );
-                    } else {
-                        // Try to read as string (simplification)
-                        let v: Option<String> = data_row.try_get(&*col.name).ok();
-                        values.insert(
-                            col.name.clone(),
-                            match v {
-                                Some(s) => ColumnValue::Text(s),
-                                None => ColumnValue::Null,
-                            },
-                        );
-                    }
+                    values.insert(
+                        col.name.clone(),
+                        read_typed_column(col.data_type, data_row, &col.name),
+                    );
                 }
 
                 let pk = if has_pk {
@@ -2308,13 +2508,7 @@ fn export_geojson(path: &Path, meta: &DatasetMeta, features: &[FeatureRow]) -> R
         let geometry = if let Some(gc) = geom_col {
             values
                 .get(&gc.name)
-                .and_then(|v| {
-                    if let ColumnValue::Text(wkt) = v {
-                        Some(serde_json::json!({"type": "Feature", "wkt": wkt}))
-                    } else {
-                        None
-                    }
-                })
+                .map(geogit_encoding::geometry::geometry_value_to_geojson)
                 .unwrap_or(serde_json::Value::Null)
         } else {
             serde_json::Value::Null
@@ -3370,4 +3564,97 @@ fn cmd_raster_info(dataset: &str) -> Result<()> {
     println!("Tiles: {tile_count}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct MemRow {
+        bools: HashMap<String, bool>,
+        ints: HashMap<String, i64>,
+        floats: HashMap<String, f64>,
+        texts: HashMap<String, String>,
+        blobs: HashMap<String, Vec<u8>>,
+    }
+
+    impl TypedRow for MemRow {
+        fn get_bool(&self, name: &str) -> Option<bool> {
+            self.bools.get(name).copied()
+        }
+        fn get_i64(&self, name: &str) -> Option<i64> {
+            self.ints.get(name).copied()
+        }
+        fn get_f64(&self, name: &str) -> Option<f64> {
+            self.floats.get(name).copied()
+        }
+        fn get_text(&self, name: &str) -> Option<String> {
+            self.texts.get(name).cloned()
+        }
+        fn get_blob(&self, name: &str) -> Option<Vec<u8>> {
+            self.blobs.get(name).cloned()
+        }
+    }
+
+    #[test]
+    fn test_read_typed_column_keeps_integers_and_floats() {
+        let mut row = MemRow::default();
+        row.ints.insert("population".into(), 13960000);
+        row.floats.insert("area".into(), 2194.07);
+        row.bools.insert("capital".into(), true);
+        row.texts.insert("founded".into(), "1457-01-01".into());
+
+        assert_eq!(
+            read_typed_column(DataType::Integer, &row, "population"),
+            ColumnValue::Integer(13960000)
+        );
+        assert_eq!(
+            read_typed_column(DataType::Float, &row, "area"),
+            ColumnValue::Float(2194.07)
+        );
+        assert_eq!(
+            read_typed_column(DataType::Boolean, &row, "capital"),
+            ColumnValue::Bool(true)
+        );
+        assert_eq!(
+            read_typed_column(DataType::Date, &row, "founded"),
+            ColumnValue::Text("1457-01-01".into())
+        );
+        assert_eq!(
+            read_typed_column(DataType::Integer, &row, "missing"),
+            ColumnValue::Null
+        );
+    }
+
+    #[test]
+    fn test_read_typed_column_geometry_from_wkt() {
+        let mut row = MemRow::default();
+        row.texts
+            .insert("geom".into(), "POINT(139.6917 35.6895)".into());
+        let value = read_typed_column(DataType::Geometry, &row, "geom");
+        match &value {
+            ColumnValue::Blob(data) => assert_ne!(data.as_slice(), b"GEOMETRY"),
+            ColumnValue::Text(wkt) => {
+                assert!(wkt.contains("139.6917"));
+                assert_ne!(wkt, "GEOMETRY");
+            }
+            other => panic!("expected geometry blob or wkt, got {other:?}"),
+        }
+        let json = geogit_encoding::geometry::geometry_value_to_geojson(&value);
+        assert_eq!(json["type"], "Point");
+        assert!((json["coordinates"][0].as_f64().unwrap() - 139.6917).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_shape_to_wkt_point() {
+        let wkt = shape_to_wkt(&shapefile::Shape::Point(shapefile::Point::new(
+            139.6917, 35.6895,
+        )))
+        .unwrap();
+        assert!(wkt.starts_with("POINT("));
+        assert!(wkt.contains("139.6917"));
+        assert!(wkt.contains("35.6895"));
+        assert_ne!(wkt, "GEOMETRY");
+    }
 }

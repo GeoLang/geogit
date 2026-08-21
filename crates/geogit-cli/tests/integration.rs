@@ -79,6 +79,19 @@ impl Drop for TempDir {
     }
 }
 
+fn gpkg_point_blob(x: f64, y: f64) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&[0x47, 0x50]);
+    data.push(0x00);
+    data.push(0x01);
+    data.extend_from_slice(&0i32.to_le_bytes());
+    data.push(0x01);
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&x.to_le_bytes());
+    data.extend_from_slice(&y.to_le_bytes());
+    data
+}
+
 /// Create a minimal GeoPackage with one table for testing import.
 fn create_test_gpkg(path: &Path) {
     let conn = rusqlite::Connection::open(path).unwrap();
@@ -119,12 +132,47 @@ fn create_test_gpkg(path: &Path) {
             population INTEGER,
             geom BLOB
         );
-        INSERT INTO cities VALUES (1, 'Tokyo', 13960000, NULL);
-        INSERT INTO cities VALUES (2, 'Delhi', 11034555, NULL);
-        INSERT INTO cities VALUES (3, 'Shanghai', 24870895, NULL);
         ",
     )
     .unwrap();
+    let mut stmt = conn
+        .prepare("INSERT INTO cities VALUES (?1, ?2, ?3, ?4)")
+        .unwrap();
+    stmt.execute(rusqlite::params![
+        1,
+        "Tokyo",
+        13960000,
+        gpkg_point_blob(139.6917, 35.6895)
+    ])
+    .unwrap();
+    stmt.execute(rusqlite::params![
+        2,
+        "Delhi",
+        11034555,
+        gpkg_point_blob(77.2090, 28.6139)
+    ])
+    .unwrap();
+    stmt.execute(rusqlite::params![
+        3,
+        "Shanghai",
+        24870895,
+        gpkg_point_blob(121.4737, 31.2304)
+    ])
+    .unwrap();
+}
+
+fn create_test_shapefile(path: &Path) {
+    let table = shapefile::dbase::TableWriterBuilder::new()
+        .add_character_field(shapefile::dbase::FieldName::try_from("name").unwrap(), 50);
+    let mut writer = shapefile::Writer::from_path(path, table).unwrap();
+    let mut record = shapefile::dbase::Record::default();
+    record.insert(
+        "name".to_string(),
+        shapefile::dbase::FieldValue::Character(Some("Tokyo".to_string())),
+    );
+    writer
+        .write_shape_and_record(&shapefile::Point::new(139.6917, 35.6895), &record)
+        .unwrap();
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -411,6 +459,15 @@ fn test_export_geojson() {
     assert_eq!(parsed["type"], "FeatureCollection");
     let features = parsed["features"].as_array().unwrap();
     assert_eq!(features.len(), 3);
+    let tokyo = features
+        .iter()
+        .find(|f| f["properties"]["name"] == "Tokyo")
+        .expect("Tokyo feature");
+    assert_eq!(tokyo["geometry"]["type"], "Point");
+    let coords = tokyo["geometry"]["coordinates"].as_array().unwrap();
+    assert!((coords[0].as_f64().unwrap() - 139.6917).abs() < 1e-6);
+    assert!((coords[1].as_f64().unwrap() - 35.6895).abs() < 1e-6);
+    assert!(!content.contains("\"geometry\": null"));
 }
 
 #[test]
@@ -437,6 +494,43 @@ fn test_export_gpkg() {
         .query_row("SELECT COUNT(*) FROM cities", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 3);
+}
+
+#[test]
+fn test_import_shapefile_stores_real_geometry() {
+    let dir = tempdir("import-shp");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let shp = dir.path().join("places.shp");
+    create_test_shapefile(&shp);
+    let source = format!("SHP:{}", shp.display());
+    let (stdout, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "shapefile import failed: {stderr}");
+    assert!(stdout.contains("Imported places"));
+
+    let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    let geom: Vec<u8> = wc
+        .query_row("SELECT geom FROM places WHERE fid = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_ne!(geom, b"GEOMETRY");
+    assert!(
+        geom.len() > 8,
+        "geometry blob too small: {} bytes",
+        geom.len()
+    );
+
+    let json_path = dir.path().join("places.geojson");
+    let (_, stderr, success) = run(&repo, &["export", "places", json_path.to_str().unwrap()]);
+    assert!(success, "export after shapefile import failed: {stderr}");
+    let content = fs::read_to_string(&json_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let feature = &parsed["features"][0];
+    assert_eq!(feature["geometry"]["type"], "Point");
+    let coords = feature["geometry"]["coordinates"].as_array().unwrap();
+    assert!((coords[0].as_f64().unwrap() - 139.6917).abs() < 1e-6);
+    assert!((coords[1].as_f64().unwrap() - 35.6895).abs() < 1e-6);
 }
 
 #[test]

@@ -7,6 +7,11 @@
 //! - Non-empty non-Point geometries must have an envelope
 //! - Points and empty geometries have no envelope
 
+use crate::value::ColumnValue;
+use geozero::wkb::{GpkgWkb, Wkb};
+use geozero::wkt::Wkt;
+use geozero::{CoordDimensions, ToJson, ToWkb};
+
 /// GeoPackage binary header magic bytes
 const GP_MAGIC: [u8; 2] = [0x47, 0x50]; // "GP"
 const GP_VERSION: u8 = 0x00;
@@ -68,14 +73,19 @@ impl GpkgGeometry {
 
     /// Extract the raw WKB payload from the GeoPackage Binary.
     pub fn to_wkb(&self) -> Result<&[u8], GeometryError> {
-        if self.data.len() < 8 {
+        Self::wkb_payload(&self.data)
+    }
+
+    /// Extract the raw WKB payload from GeoPackage Binary bytes.
+    pub fn wkb_payload(data: &[u8]) -> Result<&[u8], GeometryError> {
+        if data.len() < 8 {
             return Err(GeometryError::TooShort);
         }
-        if self.data[0..2] != GP_MAGIC {
+        if data[0..2] != GP_MAGIC {
             return Err(GeometryError::InvalidMagic);
         }
 
-        let flags = self.data[3];
+        let flags = data[3];
         let envelope_type = (flags >> 1) & 0x07;
 
         let envelope_size = match envelope_type {
@@ -87,11 +97,11 @@ impl GpkgGeometry {
         };
 
         let wkb_offset = 8 + envelope_size;
-        if self.data.len() < wkb_offset {
+        if data.len() < wkb_offset {
             return Err(GeometryError::TooShort);
         }
 
-        Ok(&self.data[wkb_offset..])
+        Ok(&data[wkb_offset..])
     }
 
     /// Get the raw bytes for MessagePack storage.
@@ -162,6 +172,54 @@ pub enum GeometryError {
     InvalidEnvelopeType(u8),
 }
 
+/// Convert a stored geometry column value (WKT text or WKB/GPKG blob) to GeoJSON geometry.
+pub fn geometry_value_to_geojson(value: &ColumnValue) -> serde_json::Value {
+    match value {
+        ColumnValue::Text(wkt) => wkt_to_geojson(wkt),
+        ColumnValue::Blob(data) => bytes_to_geojson(data),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Convert WKT into a stored geometry value (GeoPackage Binary blob, or WKT on failure).
+pub fn geometry_value_from_wkt(wkt: &str) -> ColumnValue {
+    match wkt_to_gpkg_bytes(wkt, None) {
+        Some(blob) => ColumnValue::Blob(blob),
+        None => ColumnValue::Text(wkt.to_string()),
+    }
+}
+
+/// Convert WKT into GeoPackage Binary bytes.
+pub fn wkt_to_gpkg_bytes(wkt: &str, envelope: Option<Envelope>) -> Option<Vec<u8>> {
+    let wkb = Wkt(wkt).to_wkb(CoordDimensions::xy()).ok()?;
+    Some(GpkgGeometry::from_wkb(&wkb, envelope).data)
+}
+
+fn wkt_to_geojson(wkt: &str) -> serde_json::Value {
+    json_from_geozero(Wkt(wkt).to_json())
+}
+
+fn bytes_to_geojson(data: &[u8]) -> serde_json::Value {
+    if let Ok(wkb) = GpkgGeometry::wkb_payload(data) {
+        let value = json_from_geozero(Wkb(wkb).to_json());
+        if !value.is_null() {
+            return value;
+        }
+    }
+    let value = json_from_geozero(GpkgWkb(data).to_json());
+    if !value.is_null() {
+        return value;
+    }
+    json_from_geozero(Wkb(data).to_json())
+}
+
+fn json_from_geozero(result: geozero::error::Result<String>) -> serde_json::Value {
+    result
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +253,56 @@ mod tests {
 
         let extracted = gpkg.to_wkb().unwrap();
         assert_eq!(extracted, &wkb);
+    }
+
+    fn point_wkb(x: f64, y: f64) -> Vec<u8> {
+        let mut wkb = Vec::new();
+        wkb.push(0x01);
+        wkb.extend_from_slice(&1u32.to_le_bytes());
+        wkb.extend_from_slice(&x.to_le_bytes());
+        wkb.extend_from_slice(&y.to_le_bytes());
+        wkb
+    }
+
+    #[test]
+    fn test_wkt_point_to_geojson_coordinates() {
+        let json = geometry_value_to_geojson(&ColumnValue::Text("POINT(139.6917 35.6895)".into()));
+        assert_eq!(json["type"], "Point");
+        assert!((json["coordinates"][0].as_f64().unwrap() - 139.6917).abs() < 1e-9);
+        assert!((json["coordinates"][1].as_f64().unwrap() - 35.6895).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_gpkg_blob_point_to_geojson_coordinates() {
+        let gpkg = GpkgGeometry::from_wkb(&point_wkb(10.0, -20.0), None);
+        let json = geometry_value_to_geojson(&ColumnValue::Blob(gpkg.data));
+        assert_eq!(json["type"], "Point");
+        assert_eq!(json["coordinates"][0], 10.0);
+        assert_eq!(json["coordinates"][1], -20.0);
+    }
+
+    #[test]
+    fn test_raw_wkb_point_to_geojson_coordinates() {
+        let json = geometry_value_to_geojson(&ColumnValue::Blob(point_wkb(1.5, 2.5)));
+        assert_eq!(json["type"], "Point");
+        assert_eq!(json["coordinates"][0], 1.5);
+        assert_eq!(json["coordinates"][1], 2.5);
+    }
+
+    #[test]
+    fn test_wkt_roundtrip_to_gpkg_blob() {
+        let value = geometry_value_from_wkt("POINT(1 2)");
+        match &value {
+            ColumnValue::Blob(data) => {
+                assert_ne!(data.as_slice(), b"GEOMETRY");
+                assert_eq!(&data[0..2], &GP_MAGIC);
+            }
+            ColumnValue::Text(wkt) => assert_eq!(wkt, "POINT(1 2)"),
+            other => panic!("unexpected geometry value: {other:?}"),
+        }
+        let json = geometry_value_to_geojson(&value);
+        assert_eq!(json["type"], "Point");
+        assert_eq!(json["coordinates"][0], 1.0);
+        assert_eq!(json["coordinates"][1], 2.0);
     }
 }
