@@ -684,6 +684,39 @@ fn test_create_workingcopy_gpkg() {
     assert!(success, "create-workingcopy failed: {stderr}");
     assert!(stdout.contains("Created working copy"));
     assert!(repo.join(wc_path).exists());
+
+    let config = fs::read_to_string(repo.join(".geogit/workingcopy.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(parsed["path"], wc_path);
+
+    // later commands must read the configured working copy, not repo.gpkg
+    let wc = rusqlite::Connection::open(repo.join(wc_path)).unwrap();
+    wc.execute_batch("UPDATE cities SET population = 14000000 WHERE fid = 1;")
+        .unwrap();
+    drop(wc);
+
+    let (stdout, stderr, success) = run(&repo, &["diff"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("population: 13960000 → 14000000"),
+        "diff did not read {wc_path}: {stdout}"
+    );
+}
+
+#[test]
+fn test_create_workingcopy_rejects_postgis() {
+    let dir = tempdir("create-wc-pg");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let (_, stderr, success) = run(&repo, &["create-workingcopy", "postgresql://x/y"]);
+    assert!(!success, "postgis target should be refused");
+    assert!(
+        stderr.contains("PostGIS working copies are not supported"),
+        "unexpected error: {stderr}"
+    );
+    assert!(!repo.join(".geogit/workingcopy.json").exists());
 }
 
 #[test]

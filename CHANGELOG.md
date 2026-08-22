@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- 2026-08-21: `ggt create-workingcopy <path>` honours its path. The path is
+  recorded in `.geogit/workingcopy.json` and every command that touches the
+  working copy reads it. PostGIS targets are refused instead of half-written.
 - 2026-08-15: docs drop "∞ features tracked".
 - README command table names `ggt lfs+`, which is the clap name.
 

@@ -147,10 +147,10 @@ enum Command {
     },
     /// Checkout dataset(s) to a working copy
     Checkout { datasets: Vec<String> },
-    /// Create or change working copy type
+    /// Create the GeoPackage working copy at a given path
     #[command(name = "create-workingcopy")]
     CreateWorkingcopy {
-        /// Path (e.g. data.gpkg) or connection string (postgresql://...)
+        /// Path to the working copy (e.g. data.gpkg)
         target: String,
     },
     /// Manage merge conflicts
@@ -502,11 +502,31 @@ fn find_repo_root() -> Result<PathBuf> {
     }
 }
 
-fn wc_path(root: &Path) -> PathBuf {
-    root.join(format!(
-        "{}.gpkg",
-        root.file_name().unwrap().to_string_lossy()
-    ))
+fn workingcopy_config_path(root: &Path) -> PathBuf {
+    root.join(".geogit").join("workingcopy.json")
+}
+
+fn wc_path(root: &Path) -> Result<PathBuf> {
+    let config_path = workingcopy_config_path(root);
+    if !config_path.exists() {
+        return Ok(root.join(format!(
+            "{}.gpkg",
+            root.file_name().unwrap().to_string_lossy()
+        )));
+    }
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+    let Some(configured) = config.get("path").and_then(|value| value.as_str()) else {
+        bail!("{} has no \"path\" field", config_path.display());
+    };
+    let configured = Path::new(configured);
+    Ok(if configured.is_absolute() {
+        configured.to_path_buf()
+    } else {
+        root.join(configured)
+    })
 }
 
 fn find_datasets(dir: &Path, prefix: &str, results: &mut Vec<String>) {
@@ -1118,7 +1138,7 @@ fn import_gpkg(gpkg_path: &Path, dataset_name: Option<&str>) -> Result<()> {
         bar.set_length(features.len() as u64);
         let builder = TreeBuilder::new(&repo);
         builder.import_dataset(ds_name, &meta, &features)?;
-        let wc_gpkg_path = wc_path(&repo_root);
+        let wc_gpkg_path = wc_path(&repo_root)?;
         let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
         wc.checkout(ds_name, &meta, &wc_features)?;
         bar.set_position(features.len() as u64);
@@ -1389,7 +1409,7 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     let builder = TreeBuilder::new(&repo);
     builder.import_dataset(ds_name, &meta, &features)?;
 
-    let wc_gpkg_path = wc_path(&repo_root);
+    let wc_gpkg_path = wc_path(&repo_root)?;
     let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
     wc.checkout(ds_name, &meta, &wc_features)?;
 
@@ -1698,7 +1718,7 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
             let builder = TreeBuilder::new(&repo);
             builder.import_dataset(ds_name, &meta, &features)?;
 
-            let wc_gpkg_path = wc_path(&repo_root);
+            let wc_gpkg_path = wc_path(&repo_root)?;
             let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
             wc.checkout(ds_name, &meta, &wc_features)?;
 
@@ -1722,7 +1742,7 @@ fn cmd_status() -> Result<()> {
     if root.join(".git/MERGE_HEAD").exists() {
         println!("  (merge in progress — resolve conflicts then `geogit merge --continue`)");
     }
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         let wc = GeoPackageWorkingCopy::open(&wc_gpkg)?;
         let datasets = wc.list_datasets()?;
@@ -1758,7 +1778,7 @@ fn cmd_status() -> Result<()> {
 fn cmd_commit(message: &str, filters: &[String]) -> Result<()> {
     let root = find_repo_root()?;
     let repo = Repository::open(&root)?;
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         sync_wc_to_tree(&root, &wc_gpkg, filters)?;
     }
@@ -1813,7 +1833,7 @@ fn cmd_diff(base: &str, target: Option<&str>, stat: bool) -> Result<()> {
             print_file_diff(&entries, stat);
         }
     } else {
-        let wc_gpkg = wc_path(&root);
+        let wc_gpkg = wc_path(&root)?;
         if wc_gpkg.exists() {
             let wc = GeoPackageWorkingCopy::open(&wc_gpkg)?;
             let datasets = wc.list_datasets()?;
@@ -1939,7 +1959,7 @@ fn cmd_switch(branch: &str, create: bool) -> Result<()> {
     let repo = Repository::open(&root)?;
     repo.switch_branch(branch, create)?;
     println!("Switched to branch '{branch}'");
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         refresh_working_copy(&root, &wc_gpkg)?;
     }
@@ -1970,7 +1990,7 @@ fn cmd_merge(branch: &str, abort: bool, cont: bool) -> Result<()> {
     let result = repo.merge(branch)?;
     if result.success {
         println!("{}", result.message.trim());
-        let wc_gpkg = wc_path(&root);
+        let wc_gpkg = wc_path(&root)?;
         if wc_gpkg.exists() {
             refresh_working_copy(&root, &wc_gpkg)?;
         }
@@ -2004,7 +2024,7 @@ fn cmd_pull(remote: &str, branch: Option<&str>) -> Result<()> {
     let repo = Repository::open(&root)?;
     let out = repo.pull(remote, branch)?;
     println!("{out}");
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         refresh_working_copy(&root, &wc_gpkg)?;
     }
@@ -2042,7 +2062,7 @@ fn cmd_reset(target: &str) -> Result<()> {
     let root = find_repo_root()?;
     Repository::open(&root)?.reset_hard(target)?;
     println!("Reset to {target}");
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         refresh_working_copy(&root, &wc_gpkg)?;
     }
@@ -2056,7 +2076,7 @@ fn cmd_restore(datasets: &[String], source: &str) -> Result<()> {
         repo.checkout_path(source, &format!("{ds}/.table-dataset"))?;
         println!("Restored {ds} from {source}");
     }
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
         refresh_working_copy(&root, &wc_gpkg)?;
     }
@@ -2065,7 +2085,7 @@ fn cmd_restore(datasets: &[String], source: &str) -> Result<()> {
 
 fn cmd_checkout(datasets: &[String]) -> Result<()> {
     let root = find_repo_root()?;
-    let wc_gpkg = wc_path(&root);
+    let wc_gpkg = wc_path(&root)?;
     let ds_list = if datasets.is_empty() {
         let mut found = Vec::new();
         find_datasets(&root, "", &mut found);
@@ -2107,106 +2127,19 @@ fn cmd_checkout(datasets: &[String]) -> Result<()> {
 }
 
 fn cmd_create_workingcopy(target: &str) -> Result<()> {
-    let root = find_repo_root()?;
     if target.starts_with("postgresql://") || target.starts_with("postgres://") {
-        // PostGIS working copy - store config and push datasets
-        let config_dir = root.join(".geogit");
-        std::fs::create_dir_all(&config_dir)?;
-        std::fs::write(
-            config_dir.join("workingcopy.json"),
-            format!("{{\"type\":\"postgis\",\"url\":\"{target}\"}}"),
-        )?;
-        // Push all datasets to PostGIS
-        let mut datasets = Vec::new();
-        find_datasets(&root, "", &mut datasets);
-        if !datasets.is_empty() {
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                let (client, connection) = tokio_postgres::connect(target, tokio_postgres::NoTls)
-                    .await
-                    .context("failed to connect to PostGIS")?;
-                tokio::spawn(async move {
-                    let _ = connection.await;
-                });
-                for ds in &datasets {
-                    let meta = load_dataset_meta(&root, ds)?;
-                    let feature_dir = root.join(ds).join(".table-dataset/feature");
-                    let features = load_features_from_tree(&feature_dir, &meta)?;
-                    let table_name = ds.replace('/', "_");
-                    // Create table
-                    let mut col_defs = Vec::new();
-                    for col in &meta.schema.0 {
-                        let pg_type = match col.data_type {
-                            DataType::Integer => "BIGINT",
-                            DataType::Float => "DOUBLE PRECISION",
-                            DataType::Boolean => "BOOLEAN",
-                            DataType::Blob => "BYTEA",
-                            DataType::Date => "DATE",
-                            DataType::Timestamp => "TIMESTAMPTZ",
-                            DataType::Geometry => "GEOMETRY",
-                            _ => "TEXT",
-                        };
-                        let pk = if col.primary_key_index.is_some() {
-                            " PRIMARY KEY"
-                        } else {
-                            ""
-                        };
-                        col_defs.push(format!("\"{0}\" {pg_type}{pk}", col.name));
-                    }
-                    let create_sql = format!(
-                        "CREATE TABLE IF NOT EXISTS \"{table_name}\" ({})",
-                        col_defs.join(", ")
-                    );
-                    client.execute(&create_sql, &[]).await?;
-                    // Insert features
-                    for (_pk, values) in &features {
-                        let cols: Vec<String> = meta
-                            .schema
-                            .0
-                            .iter()
-                            .map(|c| format!("\"{}\"", c.name))
-                            .collect();
-                        let params: Vec<String> =
-                            (1..=cols.len()).map(|i| format!("${i}")).collect();
-                        let insert_sql = format!(
-                            "INSERT INTO \"{table_name}\" ({}) VALUES ({}) ON CONFLICT DO NOTHING",
-                            cols.join(", "),
-                            params.join(", ")
-                        );
-                        let vals: Vec<String> = meta
-                            .schema
-                            .0
-                            .iter()
-                            .map(|c| match values.get(&c.name) {
-                                Some(ColumnValue::Text(s)) => s.clone(),
-                                Some(ColumnValue::Integer(i)) => i.to_string(),
-                                Some(ColumnValue::Float(f)) => f.to_string(),
-                                Some(ColumnValue::Bool(b)) => b.to_string(),
-                                _ => String::new(),
-                            })
-                            .collect();
-                        let val_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vals
-                            .iter()
-                            .map(|v| v as &(dyn tokio_postgres::types::ToSql + Sync))
-                            .collect();
-                        let _ = client.execute(&insert_sql, &val_refs).await;
-                    }
-                    println!("  Synced {ds} ({} features) to PostGIS", features.len());
-                }
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
-        println!("Configured PostGIS working copy: {target}");
-    } else {
-        // GeoPackage - just create/refresh
-        let path = if Path::new(target).is_absolute() {
-            PathBuf::from(target)
-        } else {
-            root.join(target)
-        };
-        refresh_working_copy(&root, &path)?;
-        println!("Created working copy: {}", path.display());
+        bail!("PostGIS working copies are not supported");
     }
+    let root = find_repo_root()?;
+    let config_path = workingcopy_config_path(&root);
+    std::fs::create_dir_all(config_path.parent().unwrap())?;
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&serde_json::json!({ "path": target }))?,
+    )?;
+    let path = wc_path(&root)?;
+    refresh_working_copy(&root, &path)?;
+    println!("Created working copy: {}", path.display());
     Ok(())
 }
 

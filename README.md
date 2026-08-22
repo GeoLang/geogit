@@ -164,7 +164,7 @@ Schema evolution is not implemented. The dataset schema is written once at impor
 | `ggt raster import\|ls\|info` | Raster datasets (GeoTIFF) |
 | `ggt conflicts [ls\|abort]` | View/manage merge conflicts |
 | `ggt resolve [paths]` | Resolve conflicts |
-| `ggt create-workingcopy <target>` | Create the GeoPackage working copy. The target path is not honoured: the working copy is always `<root>/<rootname>.gpkg`, and PostGIS targets are not implemented |
+| `ggt create-workingcopy <path>` | Create the GeoPackage working copy at `<path>`, recorded in `.geogit/workingcopy.json` so status, commit, diff and checkout read it. PostGIS targets are refused |
 | `ggt lfs+ ls-files\|fetch\|gc` | Manage Git LFS objects |
 | `ggt version` | Show version information |
 

@@ -223,7 +223,7 @@ ggt push origin master</pre>
 <tr><td><code>ggt license set|show</code></td><td>Dataset license management</td></tr>
 <tr><td><code>ggt pointcloud import|ls|info</code></td><td>Point cloud datasets (LAS/LAZ)</td></tr>
 <tr><td><code>ggt raster import|ls|info</code></td><td>Raster datasets (GeoTIFF)</td></tr>
-<tr><td><code>ggt create-workingcopy &lt;target&gt;</code></td><td>Create the GeoPackage working copy. The target path is not honoured (always <code>&lt;root&gt;/&lt;rootname&gt;.gpkg</code>), and PostGIS targets are not implemented</td></tr>
+<tr><td><code>ggt create-workingcopy &lt;path&gt;</code></td><td>Create the GeoPackage working copy at <code>&lt;path&gt;</code>, recorded in <code>.geogit/workingcopy.json</code> so status, commit, diff and checkout read it. PostGIS targets are refused</td></tr>
 <tr><td><code>ggt lfs+ ls-files|fetch|gc</code></td><td>Manage Git LFS objects</td></tr>
 <tr><td><code>ggt version</code></td><td>Show version information</td></tr>
 </tbody>
