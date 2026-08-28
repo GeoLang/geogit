@@ -35,7 +35,7 @@ ggt data ls
 ggt data info parcels
 ggt data schema parcels
 
-# Export (GeoJSON export carries attributes only, geometry is not exported)
+# Export
 ggt export parcels output.gpkg
 ggt export parcels output.geojson
 ggt export parcels output.csv
@@ -127,7 +127,7 @@ Schema evolution is not implemented. The dataset schema is written once at impor
 |--------|--------|--------|
 | GeoPackage (.gpkg) | ✅ | ✅ |
 | Shapefile (.shp) | Attributes only, geometry is discarded | — |
-| GeoJSON | — | Attributes only, geometry is always `null` |
+| GeoJSON | — | ✅ |
 | CSV | — | ✅ |
 | PostGIS | Broken: every non-geometry column imports as Null | — |
 | Files (any) | ✅ | ✅ |

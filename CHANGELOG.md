@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- README GeoJSON export is a real geometry export, not attributes-only.
 - 2026-08-21: `ggt create-workingcopy <path>` honours its path. The path is
   recorded in `.geogit/workingcopy.json` and every command that touches the
   working copy reads it. PostGIS targets are refused instead of half-written.
