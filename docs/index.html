@@ -84,7 +84,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <h3>📦 MessagePack Storage</h3>
 <ul>
 <li>MessagePack-encoded features</li>
-<li>Layout modelled on Kart (interop untested)</li>
+<li>Layout modelled on Kart, reading or writing a Kart repository is not implemented</li>
 <li>.table-dataset tree structure</li>
 <li>SHA-256 content-addressed legends</li>
 <li>Integer & msgpack-hash path schemes</li>
@@ -105,7 +105,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <ul>
 <li><code>ggt push</code> / <code>pull</code> to remotes</li>
 <li><code>ggt clone</code> remote repositories</li>
-<li><code>ggt merge</code> with conflict reporting</li>
+<li><code>ggt merge</code> runs plain <code>git merge</code>, so two edits to one feature conflict as opaque MessagePack blobs</li>
 <li><code>ggt resolve --theirs/--ours</code></li>
 <li><code>ggt remote add/remove/ls</code></li>
 </ul>
@@ -207,7 +207,7 @@ ggt push origin master</pre>
 <tr><td><code>ggt show [commit]</code></td><td>Display commit details</td></tr>
 <tr><td><code>ggt branch [name] [-d]</code></td><td>List/create/delete branches</td></tr>
 <tr><td><code>ggt switch &lt;branch&gt; [-c]</code></td><td>Switch branches</td></tr>
-<tr><td><code>ggt merge &lt;branch&gt; [--abort]</code></td><td>Merge a branch with plain <code>git merge</code>; feature-aware three-way merge is not implemented</td></tr>
+<tr><td><code>ggt merge &lt;branch&gt; [--abort]</code></td><td>Merge a branch with plain <code>git merge</code>, feature-aware three-way merge is not implemented</td></tr>
 <tr><td><code>ggt push [remote] [branch]</code></td><td>Push to a remote</td></tr>
 <tr><td><code>ggt pull [remote] [branch]</code></td><td>Pull from a remote</td></tr>
 <tr><td><code>ggt remote add|remove|ls</code></td><td>Manage remotes</td></tr>
@@ -306,7 +306,7 @@ ggt push origin master</pre>
 <tbody>
 <tr><td>Language</td><td>Rust</td><td>Python + C</td></tr>
 <tr><td>Binary size</td><td>6.6 MB (dynamically linked, requires git)</td><td>~200 MB (bundled Python)</td></tr>
-<tr><td>Storage format</td><td>Modelled on Kart, interop untested</td><td>Kart</td></tr>
+<tr><td>Storage format</td><td>Modelled on Kart, Kart repository interoperability not implemented</td><td>Kart</td></tr>
 <tr><td>GeoPackage WC</td><td>✓</td><td>✓</td></tr>
 <tr><td>PostGIS WC</td><td>Not implemented</td><td>✓</td></tr>
 <tr><td>Push/Pull</td><td>✓ (native Git)</td><td>✓</td></tr>
