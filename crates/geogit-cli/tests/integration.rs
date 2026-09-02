@@ -541,7 +541,29 @@ fn test_export_list_formats() {
     assert!(stdout.contains("GPKG"));
     assert!(stdout.contains("CSV"));
     assert!(stdout.contains("GEOJSON"));
-    assert!(stdout.contains("SHP"));
+    assert!(!stdout.contains("SHP"), "SHP is not exportable: {stdout}");
+}
+
+#[test]
+fn test_export_shapefile_is_rejected() {
+    let dir = tempdir("export-shp");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+
+    let out_shp = dir.path().join("cities.shp");
+    let (_, _, success) = run(&repo, &["export", "cities", out_shp.to_str().unwrap()]);
+    assert!(!success, "shapefile export should fail");
+    assert!(!out_shp.exists());
+    assert!(
+        !dir.path().join("cities.geojson").exists(),
+        "shapefile export must not write geojson instead"
+    );
 }
 
 #[test]
@@ -810,6 +832,52 @@ fn test_merge_and_conflict_resolution() {
         stdout.contains("commit") || stdout.contains("master"),
         "output: {stdout}"
     );
+}
+
+#[test]
+fn test_resolve_ancestor_uses_merge_base() {
+    let dir = tempdir("resolve-ancestor");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let commit = |content: &str, message: &str| {
+        fs::write(repo.join("file.txt"), content).unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+    };
+
+    commit("original", "Initial");
+
+    // two commits on the branch, so MERGE_HEAD~1 is not the merge base
+    run(&repo, &["branch", "feature"]);
+    run(&repo, &["switch", "feature"]);
+    commit("feature-first", "Feature first");
+    commit("feature-second", "Feature second");
+
+    run(&repo, &["switch", "master"]);
+    commit("master-change", "Master change");
+
+    let (stdout, _, _) = run(&repo, &["merge", "feature"]);
+    assert!(
+        stdout.to_lowercase().contains("conflict"),
+        "expected conflict: {stdout}"
+    );
+
+    let (stdout, stderr, success) = run(&repo, &["resolve", "--with", "ancestor"]);
+    assert!(success, "resolve failed: {stderr}");
+    assert!(stdout.contains("Resolved"), "output: {stdout}");
+
+    let resolved = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert_eq!(resolved, "original", "expected the merge base content");
 }
 
 #[test]

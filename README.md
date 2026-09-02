@@ -81,7 +81,7 @@ ggt metadata set documents meta.xml
 
 ## How It Works
 
-GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded blob inside a standard Git repository. The layout is modelled on [Kart](https://kartproject.org/), but interoperability with Kart repositories is not implemented and untested: geometry is encoded as a MessagePack array rather than a binary value, and the GeoPackage binary header keeps the source SRS id where Kart requires 0.
+GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded blob inside a standard Git repository. The layout is modelled on [Kart](https://kartproject.org/). Geometry is stored as GeoPackage binary with SRS id 0, the same encoding Kart uses, but reading or writing a Kart repository is untested.
 
 ```
 myproject/
@@ -118,6 +118,7 @@ myproject/
 - **File tracking** — version documents and files alongside geodata
 - **Point clouds** — import and inspect LAS/LAZ point cloud tiles
 - **Raster datasets** — import and inspect GeoTIFF raster tiles
+- **Spatial filter**: a bbox given to `init` or `clone` is stored in `.geogit/spatial-filter.json` and limits which features are written to the working copy, tested against each feature's first coordinate
 
 Schema evolution is not implemented. The dataset schema is written once at import and never rewritten, so a column added or dropped in the working copy is ignored at commit time.
 
@@ -126,10 +127,10 @@ Schema evolution is not implemented. The dataset schema is written once at impor
 | Format | Import | Export |
 |--------|--------|--------|
 | GeoPackage (.gpkg) | ✅ | ✅ |
-| Shapefile (.shp) | Attributes only, geometry is discarded | — |
+| Shapefile (.shp) | ✅ Geometry and .dbf attributes | — |
 | GeoJSON | — | ✅ |
 | CSV | — | ✅ |
-| PostGIS | Broken: every non-geometry column imports as Null | — |
+| PostGIS | Every table listed in `geometry_columns`, with typed column values. Untested against a live database | — |
 | Files (any) | ✅ | ✅ |
 | LAS/LAZ (point cloud) | ✅ | — |
 | GeoTIFF (raster) | ✅ | — |
@@ -138,9 +139,9 @@ Schema evolution is not implemented. The dataset schema is written once at impor
 
 | Command | Description |
 |---------|-------------|
-| `ggt init [dir]` | Initialize a new repository |
-| `ggt clone <url>` | Clone a remote repository |
-| `ggt import GPKG:file.gpkg` | Import a GeoPackage dataset |
+| `ggt init [dir] [--import SRC] [--spatial-filter BBOX]` | Initialize a new repository |
+| `ggt clone <url> [--spatial-filter BBOX]` | Clone a remote repository |
+| `ggt import GPKG:file.gpkg` | Import a GeoPackage, `SHP:file.shp`, or a `postgresql://` connection string |
 | `ggt status` | Show working copy changes |
 | `ggt diff [base] [target]` | Feature-level diff of the working copy; with a target, lists changed blob paths only |
 | `ggt commit -m "msg"` | Commit changes |
@@ -148,14 +149,14 @@ Schema evolution is not implemented. The dataset schema is written once at impor
 | `ggt show [commit]` | Display commit details |
 | `ggt branch [name] [-d]` | List/create/delete branches |
 | `ggt switch <branch> [-c]` | Switch branches |
-| `ggt merge <branch>` | Merge a branch with plain `git merge`. Feature-aware three-way merge is not implemented, so two edits to the same feature conflict as opaque binary blobs |
+| `ggt merge <branch> [--abort] [--continue]` | Merge a branch with plain `git merge`. Feature-aware three-way merge is not implemented, so two edits to the same feature conflict as opaque binary blobs |
 | `ggt push [remote] [branch]` | Push to a remote |
 | `ggt pull [remote] [branch]` | Pull from a remote |
 | `ggt remote add\|remove\|ls` | Manage remotes |
 | `ggt reset [target]` | Reset to a commit |
 | `ggt restore <datasets>` | Restore datasets from a commit |
 | `ggt checkout [datasets]` | Checkout tree to working copy |
-| `ggt export <ds> <path>` | Export to GPKG/GeoJSON/CSV |
+| `ggt export <ds> <path> [--ref REF]` | Export to GPKG/GeoJSON/CSV, `--list-formats` prints the format names |
 | `ggt data ls\|info\|schema` | Inspect datasets |
 | `ggt files add\|ls\|rm` | Manage versioned files |
 | `ggt metadata set\|show` | Dataset XML metadata |

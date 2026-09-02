@@ -61,8 +61,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <div class="stats">
 <div class="stat"><div class="num">5</div><div class="label">Rust crates</div></div>
 <div class="stat"><div class="num">29</div><div class="label">CLI commands</div></div>
-<div class="stat"><div class="num">2</div><div class="label">Platforms</div></div>
-<div class="stat"><div class="num">73</div><div class="label">Rust tests</div></div>
+<div class="stat"><div class="num">3</div><div class="label">Platforms</div></div>
+<div class="stat"><div class="num">82</div><div class="label">Rust tests</div></div>
 </div>
 </div>
 </header>
@@ -126,7 +126,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <li>Written in Rust (zero-cost abstractions)</li>
 <li>SQLite bundled</li>
 <li>Requires <code>git</code> on PATH, and <code>git-lfs</code> for <code>lfs+</code></li>
-<li>6.6 MB dynamically linked binary</li>
+<li>6.9 MB dynamically linked binary</li>
 </ul>
 </div>
 <div class="card">
@@ -197,9 +197,9 @@ ggt push origin master</pre>
 <tr><th>Command</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ggt init [dir]</code></td><td>Initialize a new GeoGit repository</td></tr>
-<tr><td><code>ggt clone &lt;url&gt;</code></td><td>Clone a remote repository</td></tr>
-<tr><td><code>ggt import GPKG:file.gpkg</code></td><td>Import a GeoPackage dataset</td></tr>
+<tr><td><code>ggt init [dir] [--spatial-filter bbox]</code></td><td>Initialize a new GeoGit repository. A bbox filter is stored in <code>.geogit/spatial-filter.json</code> and limits which features are written to the working copy</td></tr>
+<tr><td><code>ggt clone &lt;url&gt; [--spatial-filter bbox]</code></td><td>Clone a remote repository</td></tr>
+<tr><td><code>ggt import GPKG:file.gpkg</code></td><td>Import a GeoPackage, a Shapefile with <code>SHP:</code>, or a PostGIS database with a <code>postgresql://</code> connection string</td></tr>
 <tr><td><code>ggt status</code></td><td>Show working copy changes</td></tr>
 <tr><td><code>ggt diff [base] [target]</code></td><td>Feature-level diff of the working copy; with a target, changed blob paths only</td></tr>
 <tr><td><code>ggt commit -m "msg"</code></td><td>Commit working copy changes</td></tr>
@@ -216,7 +216,7 @@ ggt push origin master</pre>
 <tr><td><code>ggt checkout [datasets]</code></td><td>Checkout tree to working copy</td></tr>
 <tr><td><code>ggt conflicts [ls|abort]</code></td><td>View/manage merge conflicts</td></tr>
 <tr><td><code>ggt resolve [paths]</code></td><td>Resolve conflicts</td></tr>
-<tr><td><code>ggt export &lt;ds&gt; &lt;path&gt;</code></td><td>Export to GPKG/GeoJSON/CSV</td></tr>
+<tr><td><code>ggt export &lt;ds&gt; &lt;path&gt; [--ref ref]</code></td><td>Export to GPKG/GeoJSON/CSV, or print the format names with <code>--list-formats</code></td></tr>
 <tr><td><code>ggt data ls|info|schema</code></td><td>Inspect datasets</td></tr>
 <tr><td><code>ggt files add|ls|rm</code></td><td>Manage versioned files</td></tr>
 <tr><td><code>ggt metadata set|show</code></td><td>Dataset XML metadata</td></tr>
@@ -305,7 +305,7 @@ ggt push origin master</pre>
 </thead>
 <tbody>
 <tr><td>Language</td><td>Rust</td><td>Python + C</td></tr>
-<tr><td>Binary size</td><td>6.6 MB (dynamically linked, requires git)</td><td>~200 MB (bundled Python)</td></tr>
+<tr><td>Binary size</td><td>6.9 MB (dynamically linked, requires git)</td><td>~200 MB (bundled Python)</td></tr>
 <tr><td>Storage format</td><td>Modelled on Kart, Kart repository interoperability not implemented</td><td>Kart</td></tr>
 <tr><td>GeoPackage WC</td><td>✓</td><td>✓</td></tr>
 <tr><td>PostGIS WC</td><td>Not implemented</td><td>✓</td></tr>
@@ -317,7 +317,7 @@ ggt push origin master</pre>
 <tr><td>License tracking</td><td>✓</td><td>Unverified</td></tr>
 <tr><td>Raster support</td><td>Import and inspect</td><td>✓</td></tr>
 <tr><td>Point cloud</td><td>Import and inspect</td><td>✓</td></tr>
-<tr><td>Platforms</td><td>Linux, macOS</td><td>Linux, macOS, Windows</td></tr>
+<tr><td>Platforms</td><td>Linux, macOS, Windows</td><td>Linux, macOS, Windows</td></tr>
 <tr><td>License</td><td>AGPL-3.0</td><td>GPL-2.0</td></tr>
 </tbody>
 </table>

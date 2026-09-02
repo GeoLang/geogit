@@ -39,7 +39,7 @@ enum Command {
         dir: PathBuf,
         #[arg(long)]
         import: Option<String>,
-        /// Spatial filter for the repository (WKT or bbox: minx,miny,maxx,maxy)
+        /// Spatial filter for the repository (bbox: minx,miny,maxx,maxy)
         #[arg(long, allow_hyphen_values = true)]
         spatial_filter: Option<String>,
     },
@@ -179,7 +179,7 @@ enum Command {
     Export {
         /// Dataset to export
         dataset: Option<String>,
-        /// Destination path or format:path (GPKG:, SHP:, CSV:, GEOJSON:)
+        /// Destination path or format:path (GPKG:, CSV:, GEOJSON:)
         destination: Option<String>,
         /// List supported export formats
         #[arg(long)]
@@ -2224,10 +2224,21 @@ fn cmd_resolve(
             }
         }
         "ancestor" => {
-            // Checkout from merge base
+            let base = std::process::Command::new("git")
+                .args(["merge-base", "HEAD", "MERGE_HEAD"])
+                .current_dir(&root)
+                .output()
+                .context("failed to run git merge-base")?;
+            if !base.status.success() {
+                bail!(
+                    "no merge base for HEAD and MERGE_HEAD: {}",
+                    String::from_utf8_lossy(&base.stderr).trim()
+                );
+            }
+            let base = String::from_utf8_lossy(&base.stdout).trim().to_string();
             for path in &conflicts {
                 let _ = std::process::Command::new("git")
-                    .args(["checkout", "MERGE_HEAD~1", "--", path])
+                    .args(["checkout", &base, "--", path])
                     .current_dir(&root)
                     .output();
             }
@@ -2264,7 +2275,6 @@ fn cmd_export(
     if list_formats {
         println!("Supported export formats:");
         println!("  GPKG      GeoPackage (.gpkg)");
-        println!("  SHP       Shapefile (.shp)");
         println!("  CSV       Comma-separated values (.csv)");
         println!("  GEOJSON   GeoJSON (.geojson)");
         return Ok(());
@@ -2366,11 +2376,7 @@ fn cmd_export(
         "GPKG" => export_gpkg(&path, dataset, &meta, &features)?,
         "CSV" => export_csv(&path, &meta, &features)?,
         "GEOJSON" => export_geojson(&path, &meta, &features)?,
-        "SHP" => {
-            println!("Shapefile export: writing GeoJSON instead (SHP write not yet supported)");
-            let json_path = path.with_extension("geojson");
-            export_geojson(&json_path, &meta, &features)?;
-        }
+        "SHP" => bail!("Shapefile export is not supported. Use GPKG, CSV or GEOJSON"),
         _ => bail!("unsupported export format: {format}"),
     }
 

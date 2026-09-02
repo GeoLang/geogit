@@ -15,12 +15,22 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-02: `ggt resolve --with ancestor` checks out the merge base of HEAD
+  and MERGE_HEAD. It used to check out `MERGE_HEAD~1`, the first parent of the
+  merged commit, which is the merge base only when the merged branch is one
+  commit ahead.
 - `ggt status` and `ggt diff` report the actual feature values of working copy
   edits. Updates and deletes keep their pre-edit row, so diffs show old and new
   values and `ggt commit` writes real values into the tree instead of nulls.
 
 ### Removed
 
+- 2026-09-02: The `geogit_core::merge` module, which computed a three-way merge
+  over feature deltas. No command called it, and `ggt merge` merges GeoPackage
+  bytes through `git merge`.
+- 2026-09-02: Shapefile export. `ggt export --list-formats` no longer lists
+  SHP, and a `.shp` destination is an error instead of a GeoJSON file written
+  next to it.
 - `ggt import --all-tables`. Import already reads every table in the source and
   there is no way to select a subset.
 

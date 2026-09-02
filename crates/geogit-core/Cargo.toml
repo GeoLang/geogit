@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Core dataset model, diff, and merge for GeoGit"
+description = "Core dataset model and diff for GeoGit"
 
 [dependencies]
 geogit-encoding = { workspace = true }
