@@ -629,6 +629,73 @@ fn test_export_gpkg() {
     assert_eq!(count, 3);
 }
 
+// a .prj with no AUTHORITY, so the identifier and the srs id both come from the CRS name
+const PROJECTION_WITHOUT_AUTHORITY: &str = concat!(
+    "PROJCS[\"NZGD2000 / New Zealand Transverse Mercator 2000\",",
+    "GEOGCS[\"NZGD2000\",DATUM[\"New_Zealand_Geodetic_Datum_2000\",",
+    "SPHEROID[\"GRS 1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],",
+    "UNIT[\"degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],UNIT[\"metre\",1]]"
+);
+
+#[test]
+fn test_import_shapefile_with_a_custom_crs() {
+    let dir = tempdir("import-shp-custom-crs");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let shp = dir.path().join("places.shp");
+    create_test_shapefile(&shp);
+    fs::write(shp.with_extension("prj"), PROJECTION_WITHOUT_AUTHORITY).unwrap();
+    let source = format!("SHP:{}", shp.display());
+    let (_, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "shapefile import failed: {stderr}");
+
+    let identifier = "NZGD2000 _ New Zealand Transverse Mercator 2000";
+    let crs_path = repo.join(format!("places/.table-dataset/meta/crs/{identifier}.wkt"));
+    assert_eq!(
+        fs::read_to_string(&crs_path).unwrap(),
+        PROJECTION_WITHOUT_AUTHORITY
+    );
+
+    // kart's uint32hash of the crs name, inside its 200000 to 209199 custom range
+    let custom_srs_id = 205617;
+    let working_copy = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    let declared_srs_id: i32 = working_copy
+        .query_row(
+            "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = 'places'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(declared_srs_id, custom_srs_id);
+
+    let (srs_name, organization, definition): (String, String, String) = working_copy
+        .query_row(
+            "SELECT srs_name, organization, definition FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
+            [custom_srs_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(srs_name, "NZGD2000 / New Zealand Transverse Mercator 2000");
+    assert_eq!(organization, "NONE");
+    assert_eq!(definition, PROJECTION_WITHOUT_AUTHORITY);
+
+    let working_copy_geometry: Vec<u8> = working_copy
+        .query_row("SELECT geom FROM places WHERE fid = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        i32::from_le_bytes(working_copy_geometry[4..8].try_into().unwrap()),
+        custom_srs_id
+    );
+
+    for geometry in stored_geometries(&repo.join("places/.table-dataset/feature")) {
+        assert_eq!(&geometry[4..8], &[0, 0, 0, 0]);
+    }
+}
+
 #[test]
 fn test_import_shapefile_stores_real_geometry() {
     let dir = tempdir("import-shp");

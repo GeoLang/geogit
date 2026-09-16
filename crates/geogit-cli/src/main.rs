@@ -566,26 +566,6 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
-fn crs_identifier(definition: &str) -> Option<String> {
-    // the outermost node is the last one closed, so its authority is the last in the text
-    if let Some(start) = definition.rfind("AUTHORITY[") {
-        let mut quoted = definition[start..].split('"').skip(1).step_by(2);
-        if let (Some(authority), Some(code)) = (quoted.next(), quoted.next()) {
-            let authority = authority.trim();
-            let code = code.trim();
-            if !authority.is_empty() && !code.is_empty() {
-                return Some(format!("{authority}:{code}"));
-            }
-        }
-    }
-    let name = definition.split('"').nth(1)?.trim();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.replace('/', "_"))
-    }
-}
-
 fn read_crs_definitions(meta_dir: &Path) -> BTreeMap<String, String> {
     let mut definitions = BTreeMap::new();
     let Ok(entries) = std::fs::read_dir(meta_dir.join("crs")) else {
@@ -1364,7 +1344,7 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     let projection = std::fs::read_to_string(shp_path.with_extension("prj")).ok();
     let geometry_crs = projection
         .as_deref()
-        .and_then(crs_identifier)
+        .and_then(geogit_encoding::crs::crs_identifier)
         .unwrap_or_else(|| "EPSG:4326".to_string());
     let mut crs_definitions = BTreeMap::new();
     if let Some(definition) = projection {
@@ -3693,21 +3673,6 @@ mod tests {
         let json = geogit_encoding::geometry::geometry_value_to_geojson(&value);
         assert_eq!(json["type"], "Point");
         assert!((json["coordinates"][0].as_f64().unwrap() - 139.6917).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_crs_identifier_prefers_the_outermost_authority() {
-        let definition = concat!(
-            "PROJCS[\"NZGD2000 / New Zealand Transverse Mercator 2000\",",
-            "GEOGCS[\"NZGD2000\",AUTHORITY[\"EPSG\",\"4167\"]],AUTHORITY[\"EPSG\",\"2193\"]]"
-        );
-        assert_eq!(crs_identifier(definition).unwrap(), "EPSG:2193");
-    }
-
-    #[test]
-    fn test_crs_identifier_falls_back_to_the_name() {
-        let definition = "PROJCS[\"Lambert / Custom\",GEOGCS[\"Custom\"]]";
-        assert_eq!(crs_identifier(definition).unwrap(), "Lambert _ Custom");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 use geogit_core::dataset::DatasetMeta;
 use geogit_core::diff::FeatureDelta;
+use geogit_encoding::crs;
 use geogit_encoding::geometry::gpkg_geometry_with_srs_id;
 use geogit_encoding::schema::{Column, DataType};
 use geogit_encoding::value::ColumnValue;
@@ -143,6 +144,15 @@ impl GeoPackageWorkingCopy {
         }
     }
 
+    fn srs_id_is_registered(&self, srs_id: i32) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT count(*) FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
+            [srs_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     /// Read one row by its primary key, as it appears in the working copy.
     fn read_row(
         &self,
@@ -166,12 +176,18 @@ impl GeoPackageWorkingCopy {
     }
 }
 
-fn column_srs_id(column: &Column) -> i32 {
-    column
-        .geometry_crs
-        .as_deref()
+fn column_srs_id(column: &Column, crs_definitions: &BTreeMap<String, String>) -> i32 {
+    let identifier = column.geometry_crs.as_deref();
+    let epsg_code = identifier
         .and_then(|crs| crs.strip_prefix("EPSG:"))
-        .and_then(|id| id.parse().ok())
+        .and_then(|code| code.parse::<i32>().ok())
+        .filter(|code| *code > 0);
+    epsg_code
+        .or_else(|| {
+            identifier
+                .and_then(|identifier| crs_definitions.get(identifier))
+                .and_then(|definition| crs::crs_srs_id(definition))
+        })
         .unwrap_or(DEFAULT_SRS_ID)
 }
 
@@ -226,18 +242,45 @@ impl WorkingCopy for GeoPackageWorkingCopy {
             .execute(&create_sql, [])
             .context("create dataset table")?;
 
-        // Register in gpkg_contents
+        let geometry_srs_id = geom_col
+            .as_ref()
+            .map(|geom| column_srs_id(geom, &meta.crs_definitions));
+
+        // Register the CRS, which gpkg_contents references
+        if let Some((srs_id, definition)) = geometry_srs_id.zip(
+            geom_col
+                .as_ref()
+                .and_then(|geom| geom.geometry_crs.as_deref())
+                .and_then(|identifier| meta.crs_definitions.get(identifier)),
+        ) {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO gpkg_spatial_ref_sys
+                 (srs_name, srs_id, organization, organization_coordsys_id, definition)
+                 VALUES (?1, ?2, ?3, ?2, ?4)",
+                rusqlite::params![
+                    crs::crs_name(definition).unwrap_or(""),
+                    srs_id,
+                    crs::crs_organization(definition),
+                    definition
+                ],
+            )?;
+        }
+
+        // gpkg_contents.srs_id is a foreign key, so only name an srs the file holds
+        let contents_srs_id = match geometry_srs_id {
+            Some(srs_id) if self.srs_id_is_registered(srs_id)? => Some(srs_id),
+            _ => None,
+        };
         self.conn.execute(
-            "INSERT OR REPLACE INTO gpkg_contents (table_name, data_type, identifier)
-             VALUES (?1, 'features', ?2)",
-            [&table_name, &meta.title],
+            "INSERT OR REPLACE INTO gpkg_contents (table_name, data_type, identifier, srs_id)
+             VALUES (?1, 'features', ?2, ?3)",
+            rusqlite::params![table_name, meta.title, contents_srs_id],
         )?;
 
         // Register geometry column
-        let geometry_srs_id = geom_col.as_ref().map(column_srs_id);
         if let Some(ref geom) = geom_col {
             let geom_type = geom.geometry_type.as_deref().unwrap_or("GEOMETRY");
-            let srs_id = column_srs_id(geom);
+            let srs_id = geometry_srs_id.unwrap_or(DEFAULT_SRS_ID);
 
             self.conn.execute(
                 "INSERT OR REPLACE INTO gpkg_geometry_columns
@@ -467,6 +510,141 @@ mod tests {
             path_structure: PathStructure::default(),
             crs_definitions: Default::default(),
         }
+    }
+
+    fn geometry_meta(geometry_crs: &str, crs_definitions: BTreeMap<String, String>) -> DatasetMeta {
+        let mut schema = test_schema();
+        schema.0.push(Column {
+            id: Uuid::new_v4(),
+            name: "geom".into(),
+            data_type: DataType::Geometry,
+            primary_key_index: None,
+            size: None,
+            geometry_type: Some("POINT".into()),
+            geometry_crs: Some(geometry_crs.to_string()),
+            length: None,
+            precision: None,
+            scale: None,
+            timezone: None,
+        });
+        DatasetMeta {
+            title: "Cities".into(),
+            description: "World cities".into(),
+            schema,
+            path_structure: PathStructure::default(),
+            crs_definitions,
+        }
+    }
+
+    #[test]
+    fn test_checkout_without_a_crs_definition_leaves_contents_srs_unset() {
+        let dir = std::env::temp_dir().join(format!("geogit-gpkg-no-crs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut wc = GeoPackageWorkingCopy::open(&dir.join("test.gpkg")).unwrap();
+        let meta = geometry_meta("EPSG:2193", BTreeMap::new());
+        wc.checkout("cities", &meta, &test_features()).unwrap();
+
+        let contents_srs_id: Option<i32> = wc
+            .conn
+            .query_row(
+                "SELECT srs_id FROM gpkg_contents WHERE table_name = 'cities'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(contents_srs_id, None);
+
+        let column_srs_id: i32 = wc
+            .conn
+            .query_row(
+                "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = 'cities'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(column_srs_id, 2193);
+    }
+
+    #[test]
+    fn test_checkout_keeps_the_epsg_code_from_the_identifier() {
+        let dir = std::env::temp_dir().join(format!("geogit-gpkg-epsg-crs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // the definition has no authority, but the dataset names the CRS by its EPSG code
+        let meta = geometry_meta(
+            "EPSG:2193",
+            BTreeMap::from([(
+                "EPSG:2193".to_string(),
+                "PROJCS[\"NZGD2000 / New Zealand Transverse Mercator 2000\"]".to_string(),
+            )]),
+        );
+
+        let mut wc = GeoPackageWorkingCopy::open(&dir.join("test.gpkg")).unwrap();
+        wc.checkout("cities", &meta, &test_features()).unwrap();
+
+        let column_srs_id: i32 = wc
+            .conn
+            .query_row(
+                "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = 'cities'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(column_srs_id, 2193);
+    }
+
+    #[test]
+    fn test_checkout_registers_a_custom_crs() {
+        let dir =
+            std::env::temp_dir().join(format!("geogit-gpkg-custom-crs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let definition = "PROJCS[\"Lambert / Custom\",GEOGCS[\"Custom\"]]";
+        let meta = geometry_meta(
+            "Lambert _ Custom",
+            BTreeMap::from([("Lambert _ Custom".to_string(), definition.to_string())]),
+        );
+
+        let mut wc = GeoPackageWorkingCopy::open(&dir.join("test.gpkg")).unwrap();
+        wc.checkout("cities", &meta, &test_features()).unwrap();
+
+        // kart's uint32hash of the crs name, inside its 200000 to 209199 custom range
+        let expected_srs_id = 200_603;
+        let (contents_srs_id, column_srs_id, srs_name, organization, stored_definition): (
+            i32,
+            i32,
+            String,
+            String,
+            String,
+        ) = wc
+            .conn
+            .query_row(
+                "SELECT C.srs_id, G.srs_id, S.srs_name, S.organization, S.definition
+                 FROM gpkg_contents C
+                 JOIN gpkg_geometry_columns G ON G.table_name = C.table_name
+                 JOIN gpkg_spatial_ref_sys S ON S.srs_id = C.srs_id
+                 WHERE C.table_name = 'cities'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(contents_srs_id, expected_srs_id);
+        assert_eq!(column_srs_id, expected_srs_id);
+        assert_eq!(srs_name, "Lambert / Custom");
+        assert_eq!(organization, "NONE");
+        assert_eq!(stored_definition, definition);
     }
 
     #[test]
