@@ -84,7 +84,8 @@ fn gpkg_point_blob(x: f64, y: f64) -> Vec<u8> {
     data.extend_from_slice(&[0x47, 0x50]);
     data.push(0x00);
     data.push(0x01);
-    data.extend_from_slice(&0i32.to_le_bytes());
+    // a GeoPackage carries the table's srs id in every geometry, Kart stores zero instead
+    data.extend_from_slice(&4326i32.to_le_bytes());
     data.push(0x01);
     data.extend_from_slice(&1u32.to_le_bytes());
     data.extend_from_slice(&x.to_le_bytes());
@@ -240,6 +241,53 @@ fn test_import_gpkg_and_status() {
     let (stdout, _, success) = run(&repo, &["status"]);
     assert!(success);
     assert!(stdout.contains("clean") || stdout.contains("On branch"));
+}
+
+fn find_feature_file(dir: &Path) -> PathBuf {
+    let entry = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap_or_else(|| panic!("no feature file under {}", dir.display()));
+    let path = entry.path();
+    if path.is_dir() {
+        find_feature_file(&path)
+    } else {
+        path
+    }
+}
+
+#[test]
+fn test_import_gpkg_writes_kart_geometry_and_crs() {
+    let dir = tempdir("import-kart-encoding");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("test.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    let (_, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "import failed: {stderr}");
+
+    let crs_path = repo.join("cities/.table-dataset/meta/crs/EPSG:4326.wkt");
+    assert!(crs_path.exists(), "no crs definition written");
+    assert_eq!(fs::read_to_string(&crs_path).unwrap(), "GEOGCS[\"WGS 84\"]");
+
+    let feature_path = find_feature_file(&repo.join("cities/.table-dataset/feature"));
+    let feature =
+        geogit_encoding::feature::StoredFeature::from_msgpack(&fs::read(&feature_path).unwrap())
+            .unwrap();
+    let geometry = feature
+        .values
+        .iter()
+        .find_map(|value| match value {
+            geogit_encoding::value::ColumnValue::Geometry(data) => Some(data),
+            _ => None,
+        })
+        .expect("geometry was not stored as a msgpack extension");
+    assert_eq!(&geometry[0..2], b"GP");
+    assert_eq!(&geometry[4..8], &[0, 0, 0, 0]);
 }
 
 #[test]

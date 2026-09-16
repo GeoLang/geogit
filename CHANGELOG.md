@@ -15,6 +15,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-16: Stored features follow the Kart dataset v3 encoding. Geometry is a
+  MessagePack extension of type 71 instead of an array of integers, blobs are
+  MessagePack binary, a geometry taken from a source GeoPackage is rewritten
+  with srs id 0 and the envelope Kart requires, and every vector import writes
+  its CRS to `meta/crs/<identifier>.wkt`. Features written by older versions
+  still decode.
+
 - 2026-09-02: `ggt resolve --with ancestor` checks out the merge base of HEAD
   and MERGE_HEAD. It used to check out `MERGE_HEAD~1`, the first parent of the
   merged commit, which is the merge base only when the merged branch is one

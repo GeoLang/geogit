@@ -44,6 +44,13 @@ impl<'a> TreeBuilder<'a> {
         let schema_json = serde_json::to_string_pretty(&meta.schema).context("serialize schema")?;
         std::fs::write(meta_dir.join("schema.json"), schema_json).context("write schema")?;
 
+        for (identifier, definition) in &meta.crs_definitions {
+            let crs_dir = meta_dir.join("crs");
+            std::fs::create_dir_all(&crs_dir).context("create crs dir")?;
+            std::fs::write(crs_dir.join(format!("{identifier}.wkt")), definition)
+                .with_context(|| format!("write crs {identifier}"))?;
+        }
+
         // Write meta/path-structure.json
         let ps_json = serde_json::to_string_pretty(&meta.path_structure)
             .context("serialize path structure")?;

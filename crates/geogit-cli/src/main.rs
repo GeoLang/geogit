@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -566,6 +566,104 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
+fn crs_identifier(definition: &str) -> Option<String> {
+    // the outermost node is the last one closed, so its authority is the last in the text
+    if let Some(start) = definition.rfind("AUTHORITY[") {
+        let mut quoted = definition[start..].split('"').skip(1).step_by(2);
+        if let (Some(authority), Some(code)) = (quoted.next(), quoted.next()) {
+            let authority = authority.trim();
+            let code = code.trim();
+            if !authority.is_empty() && !code.is_empty() {
+                return Some(format!("{authority}:{code}"));
+            }
+        }
+    }
+    let name = definition.split('"').nth(1)?.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.replace('/', "_"))
+    }
+}
+
+fn read_crs_definitions(meta_dir: &Path) -> BTreeMap<String, String> {
+    let mut definitions = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(meta_dir.join("crs")) else {
+        return definitions;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("wkt") {
+            continue;
+        }
+        let Some(identifier) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Ok(definition) = std::fs::read_to_string(&path) {
+            definitions.insert(identifier.to_string(), definition);
+        }
+    }
+    definitions
+}
+
+fn read_gpkg_crs_definitions(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+) -> BTreeMap<String, String> {
+    let mut definitions = BTreeMap::new();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT srs.srs_id, srs.definition
+         FROM gpkg_geometry_columns gc
+         JOIN gpkg_spatial_ref_sys srs ON srs.srs_id = gc.srs_id
+         WHERE gc.table_name = ?1",
+    ) else {
+        return definitions;
+    };
+    let Ok(rows) = stmt.query_map([table_name], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return definitions;
+    };
+    for (srs_id, definition) in rows.flatten() {
+        let trimmed = definition.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("undefined") {
+            continue;
+        }
+        definitions.insert(format!("EPSG:{srs_id}"), definition);
+    }
+    definitions
+}
+
+fn stored_geometry(value: ColumnValue) -> Result<ColumnValue> {
+    match value {
+        ColumnValue::Blob(data) | ColumnValue::Geometry(data) => {
+            let normalised = geogit_encoding::geometry::normalise_gpkg_geometry(&data)
+                .context("normalising source geometry")?;
+            Ok(ColumnValue::Geometry(normalised))
+        }
+        other => Ok(other),
+    }
+}
+
+fn stored_values(
+    schema: &Schema,
+    values: &HashMap<String, ColumnValue>,
+) -> Result<Vec<ColumnValue>> {
+    schema
+        .0
+        .iter()
+        .filter(|c| c.primary_key_index.is_none())
+        .map(|c| {
+            let value = values.get(&c.name).cloned().unwrap_or(ColumnValue::Null);
+            if c.data_type == DataType::Geometry {
+                stored_geometry(value)
+            } else {
+                Ok(value)
+            }
+        })
+        .collect()
+}
+
 fn format_pk(pk: &[ColumnValue]) -> String {
     pk.iter().map(format_value).collect::<Vec<_>>().join(",")
 }
@@ -583,7 +681,7 @@ fn format_value(v: &ColumnValue) -> String {
                 format!("\"{s}\"")
             }
         }
-        ColumnValue::Blob(b) => format!("<{} bytes>", b.len()),
+        ColumnValue::Blob(b) | ColumnValue::Geometry(b) => format!("<{} bytes>", b.len()),
     }
 }
 
@@ -765,6 +863,7 @@ fn load_dataset_meta(root: &Path, ds: &str) -> Result<DatasetMeta> {
         description: description.trim().to_string(),
         schema,
         path_structure: ps,
+        crs_definitions: read_crs_definitions(&meta_dir),
     })
 }
 
@@ -808,12 +907,7 @@ fn sync_wc_to_tree(root: &Path, wc_gpkg: &Path, filter_datasets: &[String]) -> R
             match delta {
                 geogit_core::diff::FeatureDelta::Insert { pk, new }
                 | geogit_core::diff::FeatureDelta::Update { pk, new, .. } => {
-                    let stored_vals: Vec<ColumnValue> = schema
-                        .0
-                        .iter()
-                        .filter(|c| c.primary_key_index.is_none())
-                        .map(|c| new.get(&c.name).cloned().unwrap_or(ColumnValue::Null))
-                        .collect();
+                    let stored_vals = stored_values(&schema, new)?;
                     let stored = StoredFeature {
                         legend_hash: legend_hash.clone(),
                         values: stored_vals,
@@ -1085,6 +1179,7 @@ fn import_gpkg(gpkg_path: &Path, dataset_name: Option<&str>) -> Result<()> {
             description: String::new(),
             schema: schema.clone(),
             path_structure: PathStructure::default(),
+            crs_definitions: read_gpkg_crs_definitions(&conn, table_name),
         };
 
         let col_names: Vec<String> = schema.0.iter().map(|c| format!("\"{}\"", c.name)).collect();
@@ -1120,12 +1215,7 @@ fn import_gpkg(gpkg_path: &Path, dataset_name: Option<&str>) -> Result<()> {
                 }
                 values.insert(col.name.clone(), val);
             }
-            let stored_vals: Vec<ColumnValue> = schema
-                .0
-                .iter()
-                .filter(|c| c.primary_key_index.is_none())
-                .map(|c| values.get(&c.name).cloned().unwrap_or(ColumnValue::Null))
-                .collect();
+            let stored_vals = stored_values(&schema, &values)?;
             let stored = StoredFeature {
                 legend_hash: legend_hash.clone(),
                 values: stored_vals,
@@ -1271,6 +1361,16 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
     // Build schema from dBASE fields
     let mut columns = Vec::new();
 
+    let projection = std::fs::read_to_string(shp_path.with_extension("prj")).ok();
+    let geometry_crs = projection
+        .as_deref()
+        .and_then(crs_identifier)
+        .unwrap_or_else(|| "EPSG:4326".to_string());
+    let mut crs_definitions = BTreeMap::new();
+    if let Some(definition) = projection {
+        crs_definitions.insert(geometry_crs.clone(), definition);
+    }
+
     let geometry_type = match reader.header().shape_type {
         shapefile::ShapeType::Point
         | shapefile::ShapeType::PointM
@@ -1293,7 +1393,7 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
         data_type: DataType::Geometry,
         primary_key_index: None,
         geometry_type: Some(geometry_type.to_string()),
-        geometry_crs: Some("EPSG:4326".to_string()),
+        geometry_crs: Some(geometry_crs.clone()),
         size: None,
         length: None,
         precision: None,
@@ -1348,6 +1448,7 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
         description: String::new(),
         schema: schema.clone(),
         path_structure: PathStructure::default(),
+        crs_definitions,
     };
 
     let non_pk_ids: Vec<uuid::Uuid> = schema
@@ -1392,12 +1493,7 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
         }
 
         let pk = vec![ColumnValue::Integer(fid)];
-        let stored_vals: Vec<ColumnValue> = schema
-            .0
-            .iter()
-            .filter(|c| c.primary_key_index.is_none())
-            .map(|c| values.get(&c.name).cloned().unwrap_or(ColumnValue::Null))
-            .collect();
+        let stored_vals = stored_values(&schema, &values)?;
         let stored = StoredFeature {
             legend_hash: legend_hash.clone(),
             values: stored_vals,
@@ -1627,11 +1723,27 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
             }
 
             let schema = Schema(columns);
+            let mut crs_definitions = BTreeMap::new();
+            let srtext = client
+                .query_opt(
+                    "SELECT srtext FROM spatial_ref_sys WHERE srid = $1",
+                    &[&srid],
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|row| row.get::<_, String>(0))
+                .filter(|definition| !definition.trim().is_empty());
+            if let Some(definition) = srtext {
+                crs_definitions.insert(format!("EPSG:{srid}"), definition);
+            }
+
             let meta = DatasetMeta {
                 title: ds_name.to_string(),
                 description: String::new(),
                 schema: schema.clone(),
                 path_structure: PathStructure::default(),
+                crs_definitions,
             };
 
             let non_pk_ids: Vec<uuid::Uuid> = schema
@@ -1700,12 +1812,7 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
                     vec![ColumnValue::Integer(rowid)]
                 };
 
-                let stored_vals: Vec<ColumnValue> = schema
-                    .0
-                    .iter()
-                    .filter(|c| c.primary_key_index.is_none())
-                    .map(|c| values.get(&c.name).cloned().unwrap_or(ColumnValue::Null))
-                    .collect();
+                let stored_vals = stored_values(&schema, &values)?;
                 let stored = StoredFeature {
                     legend_hash: legend_hash.clone(),
                     values: stored_vals,
@@ -2312,6 +2419,7 @@ fn cmd_export(
             description: String::new(),
             schema,
             path_structure: ps,
+            crs_definitions: BTreeMap::new(),
         };
         // For ref-based export, we need to checkout to a temp dir
         let tmp = std::env::temp_dir().join(format!("geogit-export-{}", std::process::id()));
@@ -2439,7 +2547,9 @@ fn export_geojson(path: &Path, meta: &DatasetMeta, features: &[FeatureRow]) -> R
                 ColumnValue::Integer(i) => serde_json::json!(i),
                 ColumnValue::Float(f) => serde_json::json!(f),
                 ColumnValue::Text(s) => serde_json::Value::String(s),
-                ColumnValue::Blob(_) => serde_json::Value::String("<blob>".into()),
+                ColumnValue::Blob(_) | ColumnValue::Geometry(_) => {
+                    serde_json::Value::String("<blob>".into())
+                }
             };
             properties.insert(col.name.clone(), json_val);
         }
@@ -3573,16 +3683,57 @@ mod tests {
             .insert("geom".into(), "POINT(139.6917 35.6895)".into());
         let value = read_typed_column(DataType::Geometry, &row, "geom");
         match &value {
-            ColumnValue::Blob(data) => assert_ne!(data.as_slice(), b"GEOMETRY"),
+            ColumnValue::Geometry(data) => assert_eq!(&data[0..2], b"GP"),
             ColumnValue::Text(wkt) => {
                 assert!(wkt.contains("139.6917"));
                 assert_ne!(wkt, "GEOMETRY");
             }
-            other => panic!("expected geometry blob or wkt, got {other:?}"),
+            other => panic!("expected a geometry or wkt value, got {other:?}"),
         }
         let json = geogit_encoding::geometry::geometry_value_to_geojson(&value);
         assert_eq!(json["type"], "Point");
         assert!((json["coordinates"][0].as_f64().unwrap() - 139.6917).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_crs_identifier_prefers_the_outermost_authority() {
+        let definition = concat!(
+            "PROJCS[\"NZGD2000 / New Zealand Transverse Mercator 2000\",",
+            "GEOGCS[\"NZGD2000\",AUTHORITY[\"EPSG\",\"4167\"]],AUTHORITY[\"EPSG\",\"2193\"]]"
+        );
+        assert_eq!(crs_identifier(definition).unwrap(), "EPSG:2193");
+    }
+
+    #[test]
+    fn test_crs_identifier_falls_back_to_the_name() {
+        let definition = "PROJCS[\"Lambert / Custom\",GEOGCS[\"Custom\"]]";
+        assert_eq!(crs_identifier(definition).unwrap(), "Lambert _ Custom");
+    }
+
+    #[test]
+    fn test_stored_values_gives_geometry_a_zero_srs_id() {
+        let schema = Schema(vec![Column {
+            id: uuid::Uuid::new_v4(),
+            name: "geom".into(),
+            data_type: DataType::Geometry,
+            primary_key_index: None,
+            geometry_type: Some("POINT".into()),
+            geometry_crs: Some("EPSG:4326".into()),
+            size: None,
+            length: None,
+            precision: None,
+            scale: None,
+            timezone: None,
+        }]);
+        let mut source = geogit_encoding::geometry::wkt_to_gpkg_bytes("POINT(1 2)").unwrap();
+        source[4..8].copy_from_slice(&4326i32.to_le_bytes());
+        let values = HashMap::from([("geom".to_string(), ColumnValue::Blob(source))]);
+
+        let stored = stored_values(&schema, &values).unwrap();
+        match &stored[0] {
+            ColumnValue::Geometry(data) => assert_eq!(&data[4..8], &[0, 0, 0, 0]),
+            other => panic!("expected a geometry value, got {other:?}"),
+        }
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use geogit_encoding::path::PathStructure;
 use geogit_encoding::schema::Schema;
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,9 @@ pub struct DatasetMeta {
     pub description: String,
     pub schema: Schema,
     pub path_structure: PathStructure,
+    // identifier such as "EPSG:4326" to the well-known-text definition, written to meta/crs/
+    #[serde(default)]
+    pub crs_definitions: BTreeMap<String, String>,
 }
 
 /// Information about a dataset within a repository.

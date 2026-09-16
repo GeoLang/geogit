@@ -271,7 +271,9 @@ impl WorkingCopy for GeoPackageWorkingCopy {
                                 Some(ColumnValue::Integer(v)) => Box::new(*v),
                                 Some(ColumnValue::Float(v)) => Box::new(*v),
                                 Some(ColumnValue::Text(v)) => Box::new(v.clone()),
-                                Some(ColumnValue::Blob(v)) => Box::new(v.clone()),
+                                Some(ColumnValue::Blob(v)) | Some(ColumnValue::Geometry(v)) => {
+                                    Box::new(v.clone())
+                                }
                             }
                         })
                         .collect();
@@ -448,6 +450,7 @@ mod tests {
             description: "World cities".into(),
             schema: test_schema(),
             path_structure: PathStructure::default(),
+            crs_definitions: Default::default(),
         }
     }
 
