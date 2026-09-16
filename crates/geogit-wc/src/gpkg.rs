@@ -6,11 +6,14 @@ use rusqlite::Connection;
 
 use geogit_core::dataset::DatasetMeta;
 use geogit_core::diff::FeatureDelta;
+use geogit_encoding::geometry::gpkg_geometry_with_srs_id;
 use geogit_encoding::schema::{Column, DataType};
 use geogit_encoding::value::ColumnValue;
 
 use crate::tracking::ChangeTracker;
 use crate::traits::WorkingCopy;
+
+const DEFAULT_SRS_ID: i32 = 4326;
 
 /// GeoPackage working copy.
 ///
@@ -163,6 +166,15 @@ impl GeoPackageWorkingCopy {
     }
 }
 
+fn column_srs_id(column: &Column) -> i32 {
+    column
+        .geometry_crs
+        .as_deref()
+        .and_then(|crs| crs.strip_prefix("EPSG:"))
+        .and_then(|id| id.parse().ok())
+        .unwrap_or(DEFAULT_SRS_ID)
+}
+
 /// Convert a SQLite cell to a `ColumnValue`.
 pub fn read_sqlite_value(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<ColumnValue> {
     use rusqlite::types::ValueRef;
@@ -222,14 +234,10 @@ impl WorkingCopy for GeoPackageWorkingCopy {
         )?;
 
         // Register geometry column
+        let geometry_srs_id = geom_col.as_ref().map(column_srs_id);
         if let Some(ref geom) = geom_col {
             let geom_type = geom.geometry_type.as_deref().unwrap_or("GEOMETRY");
-            let srs_id: i64 = geom
-                .geometry_crs
-                .as_deref()
-                .and_then(|crs| crs.strip_prefix("EPSG:"))
-                .and_then(|id| id.parse().ok())
-                .unwrap_or(4326);
+            let srs_id = column_srs_id(geom);
 
             self.conn.execute(
                 "INSERT OR REPLACE INTO gpkg_geometry_columns
@@ -264,19 +272,26 @@ impl WorkingCopy for GeoPackageWorkingCopy {
                         .schema
                         .0
                         .iter()
-                        .map(|col| -> Box<dyn rusqlite::types::ToSql> {
-                            match values.get(&col.name) {
+                        .map(|col| -> Result<Box<dyn rusqlite::types::ToSql>> {
+                            Ok(match values.get(&col.name) {
                                 Some(ColumnValue::Null) | None => Box::new(rusqlite::types::Null),
                                 Some(ColumnValue::Bool(v)) => Box::new(*v),
                                 Some(ColumnValue::Integer(v)) => Box::new(*v),
                                 Some(ColumnValue::Float(v)) => Box::new(*v),
                                 Some(ColumnValue::Text(v)) => Box::new(v.clone()),
                                 Some(ColumnValue::Blob(v)) | Some(ColumnValue::Geometry(v)) => {
-                                    Box::new(v.clone())
+                                    match geometry_srs_id {
+                                        Some(srs_id) if col.data_type == DataType::Geometry => {
+                                            Box::new(gpkg_geometry_with_srs_id(v, srs_id).context(
+                                                "stamp the working copy srs id into a geometry",
+                                            )?)
+                                        }
+                                        _ => Box::new(v.clone()),
+                                    }
                                 }
-                            }
+                            })
                         })
-                        .collect();
+                        .collect::<Result<Vec<_>>>()?;
 
                     let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                         params.iter().map(|p| p.as_ref()).collect();

@@ -81,7 +81,7 @@ ggt metadata set documents meta.xml
 
 ## How It Works
 
-GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded blob inside a standard Git repository. The layout is modelled on [Kart](https://kartproject.org/). Geometry is a MessagePack extension of type 71 holding GeoPackage binary with SRS id 0, and the CRS of a vector dataset is written to `meta/crs/<identifier>.wkt`. Feature blobs taken from Kart's own test repositories decode and re-encode byte for byte, but no command has been run against a whole Kart repository.
+GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded blob inside a standard Git repository. The layout is modelled on [Kart](https://kartproject.org/). Geometry is a MessagePack extension of type 71 holding GeoPackage binary with SRS id 0, and the CRS of a vector dataset is written to `meta/crs/<identifier>.wkt`. The working copy GeoPackage gets the SRS id its table declares stamped back into every geometry. Feature blobs taken from Kart's own test repositories decode and re-encode byte for byte, but no command has been run against a whole Kart repository.
 
 ```
 myproject/

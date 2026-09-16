@@ -243,18 +243,47 @@ fn test_import_gpkg_and_status() {
     assert!(stdout.contains("clean") || stdout.contains("On branch"));
 }
 
-fn find_feature_file(dir: &Path) -> PathBuf {
-    let entry = fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .next()
-        .unwrap_or_else(|| panic!("no feature file under {}", dir.display()));
-    let path = entry.path();
-    if path.is_dir() {
-        find_feature_file(&path)
-    } else {
-        path
+fn collect_feature_files(dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_feature_files(&path, found);
+        } else {
+            found.push(path);
+        }
     }
+}
+
+fn find_feature_file(dir: &Path) -> PathBuf {
+    let mut found = Vec::new();
+    collect_feature_files(dir, &mut found);
+    found
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("no feature file under {}", dir.display()))
+}
+
+fn stored_geometries(feature_dir: &Path) -> Vec<Vec<u8>> {
+    let mut paths = Vec::new();
+    collect_feature_files(feature_dir, &mut paths);
+    let mut geometries: Vec<Vec<u8>> = paths
+        .iter()
+        .map(|path| {
+            let feature =
+                geogit_encoding::feature::StoredFeature::from_msgpack(&fs::read(path).unwrap())
+                    .unwrap();
+            feature
+                .values
+                .iter()
+                .find_map(|value| match value {
+                    geogit_encoding::value::ColumnValue::Geometry(data) => Some(data.clone()),
+                    _ => None,
+                })
+                .expect("geometry was not stored as a msgpack extension")
+        })
+        .collect();
+    geometries.sort();
+    geometries
 }
 
 #[test]
@@ -288,6 +317,62 @@ fn test_import_gpkg_writes_kart_geometry_and_crs() {
         .expect("geometry was not stored as a msgpack extension");
     assert_eq!(&geometry[0..2], b"GP");
     assert_eq!(&geometry[4..8], &[0, 0, 0, 0]);
+}
+
+#[test]
+fn test_checkout_stamps_the_working_copy_srs_id() {
+    let dir = tempdir("checkout-srs-id");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("test.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    let (_, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "import failed: {stderr}");
+
+    let working_copy = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    let declared_srs_id: i32 = working_copy
+        .query_row(
+            "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = 'cities'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut working_copy_geometries: Vec<Vec<u8>> = working_copy
+        .prepare("SELECT geom FROM cities")
+        .unwrap()
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .unwrap()
+        .map(|geometry| geometry.unwrap())
+        .collect();
+    working_copy_geometries.sort();
+
+    assert_eq!(declared_srs_id, 4326);
+    for geometry in &working_copy_geometries {
+        assert_eq!(
+            i32::from_le_bytes(geometry[4..8].try_into().unwrap()),
+            declared_srs_id
+        );
+    }
+
+    let stored = stored_geometries(&repo.join("cities/.table-dataset/feature"));
+    assert_eq!(stored.len(), working_copy_geometries.len());
+    for geometry in &stored {
+        assert_eq!(&geometry[4..8], &[0, 0, 0, 0]);
+    }
+
+    let tails = |geometries: &[Vec<u8>]| -> Vec<Vec<u8>> {
+        let mut tails: Vec<Vec<u8>> = geometries.iter().map(|g| g[8..].to_vec()).collect();
+        tails.sort();
+        tails
+    };
+    assert_eq!(
+        tails(&stored),
+        tails(&working_copy_geometries),
+        "only the srs id should differ between the tree and the working copy"
+    );
 }
 
 #[test]

@@ -146,6 +146,19 @@ fn wkb_offset(data: &[u8]) -> Result<usize, GeometryError> {
     Ok(offset)
 }
 
+// a GeoPackage rejects a geometry whose srs id differs from the one its table declares
+pub fn gpkg_geometry_with_srs_id(data: &[u8], srs_id: i32) -> Result<Vec<u8>, GeometryError> {
+    let flags = header_flags(data)?;
+    let srs_id = if flags & LITTLE_ENDIAN_FLAG != 0 {
+        srs_id.to_le_bytes()
+    } else {
+        srs_id.to_be_bytes()
+    };
+    let mut out = data.to_vec();
+    out[SRS_ID_OFFSET..HEADER_SIZE].copy_from_slice(&srs_id);
+    Ok(out)
+}
+
 // kart wants srs id zero, little-endian bytes, and an envelope on every non-empty non-point geometry
 pub fn normalise_gpkg_geometry(data: &[u8]) -> Result<Vec<u8>, GeometryError> {
     let flags = header_flags(data)?;
@@ -484,6 +497,27 @@ mod tests {
         assert_eq!(value(1), 3.0);
         assert_eq!(value(2), 0.0);
         assert_eq!(value(3), 4.0);
+    }
+
+    #[test]
+    fn test_srs_id_is_stamped_back_into_the_header() {
+        let stored = wkt_to_gpkg_bytes("POINT(1 2)").unwrap();
+        assert_eq!(&stored[SRS_ID_OFFSET..HEADER_SIZE], &[0, 0, 0, 0]);
+
+        let for_working_copy = gpkg_geometry_with_srs_id(&stored, 4326).unwrap();
+        assert_eq!(
+            i32::from_le_bytes(
+                for_working_copy[SRS_ID_OFFSET..HEADER_SIZE]
+                    .try_into()
+                    .unwrap()
+            ),
+            4326
+        );
+        assert_eq!(
+            GpkgGeometry::wkb_payload(&for_working_copy).unwrap(),
+            GpkgGeometry::wkb_payload(&stored).unwrap()
+        );
+        assert_eq!(normalise_gpkg_geometry(&for_working_copy).unwrap(), stored);
     }
 
     #[test]
