@@ -62,7 +62,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <div class="stat"><div class="num">5</div><div class="label">Rust crates</div></div>
 <div class="stat"><div class="num">29</div><div class="label">CLI commands</div></div>
 <div class="stat"><div class="num">3</div><div class="label">Platforms</div></div>
-<div class="stat"><div class="num">82</div><div class="label">Rust tests</div></div>
+<div class="stat"><div class="num">108</div><div class="label">Rust tests</div></div>
 </div>
 </div>
 </header>
@@ -85,6 +85,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <ul>
 <li>MessagePack-encoded features</li>
 <li>Layout modelled on Kart, reading or writing a Kart repository is not implemented</li>
+<li>Geometry rides in MessagePack extension 71 with srs id 0, as Kart writes it</li>
+<li>A GeoPackage import names <code>meta/crs/EPSG:&lt;n&gt;.wkt</code> after the source table's own srs id, where Kart takes the code from the WKT</li>
 <li>.table-dataset tree structure</li>
 <li>SHA-256 content-addressed legends</li>
 <li>Integer & msgpack-hash path schemes</li>
@@ -164,7 +166,7 @@ ggt init my-project
 cd my-project
 
 # Import a GeoPackage
-ggt import GPKG:~/data/parcels.gpkg
+ggt import GPKG:/data/parcels.gpkg
 
 # Create initial commit
 ggt commit -m "Import parcels dataset"

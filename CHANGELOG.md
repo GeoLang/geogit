@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- 2026-09-16: Public docs match the code. The README says which import names the
+  CRS file from the WKT authority and which names it from the source table's srs
+  id, and how the working copy picks the srs id it stamps into geometry headers.
+  The docs page counts 108 Rust tests, not 82, and its quick start drops a `~`
+  that no shell expands inside `GPKG:`.
 - README GeoJSON export is a real geometry export, not attributes-only.
 - 2026-08-21: `ggt create-workingcopy <path>` honours its path. The path is
   recorded in `.geogit/workingcopy.json` and every command that touches the
