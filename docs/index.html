@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GeoGit — Distributed Version Control for Geospatial Data</title>
+<title>GeoGit: Version Control for Geospatial Data</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#f0f6fc;--accent:#58a6ff;--accent2:#3fb950;--muted:#8b949e;--red:#f85149}
@@ -43,8 +43,8 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <body>
 <header>
 <div class="container">
-<h1>🌍 GeoGit</h1>
-<p class="tagline">Distributed version control for geospatial data, written in Rust. Branch, diff, merge, push & pull geodata like code.</p>
+<h1>GeoGit</h1>
+<p class="tagline">Version control for geospatial data on top of Git. Import GeoPackage, Shapefile and PostGIS tables, edit a GeoPackage working copy in QGIS, and commit, branch, push and pull with Git.</p>
 <div class="badges">
 <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License">
 <img src="https://img.shields.io/badge/Rust-2024-orange" alt="Rust">
@@ -60,9 +60,9 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 </div>
 <div class="stats">
 <div class="stat"><div class="num">5</div><div class="label">Rust crates</div></div>
-<div class="stat"><div class="num">29</div><div class="label">CLI commands</div></div>
-<div class="stat"><div class="num">3</div><div class="label">Platforms</div></div>
-<div class="stat"><div class="num">108</div><div class="label">Rust tests</div></div>
+<div class="stat"><div class="num">29</div><div class="label">Top-level CLI commands</div></div>
+<div class="stat"><div class="num">3</div><div class="label">CI platforms: Linux, macOS, Windows</div></div>
+<div class="stat"><div class="num">4</div><div class="label">Release targets: x86_64 and aarch64 Linux and macOS</div></div>
 </div>
 </div>
 </header>
@@ -72,38 +72,38 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 <h2>Features</h2>
 <div class="grid">
 <div class="card">
-<h3>🔀 Git-Native Version Control</h3>
+<h3>Git Repository</h3>
 <ul>
-<li>Real Git repository under the hood</li>
-<li>Branching and merging on a real Git repository</li>
+<li>A plain Git repository, driven through the <code>git</code> command</li>
+<li>Branches and merges are Git branches and merges</li>
 <li>Works with GitHub, GitLab, any Git remote</li>
 <li>Full commit history with feature-level working copy diffs</li>
 </ul>
 </div>
 <div class="card">
-<h3>📦 MessagePack Storage</h3>
+<h3>MessagePack Storage</h3>
 <ul>
 <li>MessagePack-encoded features</li>
-<li>Layout modelled on Kart, reading or writing a Kart repository is not implemented</li>
-<li>Geometry rides in MessagePack extension 71 with srs id 0, as Kart writes it</li>
+<li>Layout modelled on Kart's dataset v3. Feature blobs from Kart's test repositories decode and re-encode byte for byte, no command has been run against a whole Kart repository</li>
+<li>Geometry is stored in MessagePack extension 71 with srs id 0, as Kart writes it</li>
 <li>A GeoPackage import names <code>meta/crs/EPSG:&lt;n&gt;.wkt</code> after the source table's own srs id, where Kart takes the code from the WKT</li>
 <li>.table-dataset tree structure</li>
 <li>SHA-256 content-addressed legends</li>
-<li>Integer & msgpack-hash path schemes</li>
+<li>Integer and msgpack/hash path schemes</li>
 </ul>
 </div>
 <div class="card">
-<h3>🗺️ GeoPackage Working Copy</h3>
+<h3>GeoPackage Working Copy</h3>
 <ul>
 <li>SQLite working copy you can edit outside GeoGit</li>
 <li>SQL trigger-based change tracking</li>
 <li>Automatic sync on commit</li>
-<li>Auto-refresh on switch/merge/pull</li>
+<li>Rebuilt on switch, merge, pull, reset and restore</li>
 <li>Partial GeoPackage metadata tables (not a conformant GeoPackage)</li>
 </ul>
 </div>
 <div class="card">
-<h3>🔄 Full Git Workflow</h3>
+<h3>Git Workflow</h3>
 <ul>
 <li><code>ggt push</code> / <code>pull</code> to remotes</li>
 <li><code>ggt clone</code> remote repositories</li>
@@ -113,7 +113,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 </ul>
 </div>
 <div class="card">
-<h3>📊 Feature-Level Diffs</h3>
+<h3>Feature-Level Diffs</h3>
 <ul>
 <li>Per-feature INSERT/UPDATE/DELETE detection in the working copy</li>
 <li>Column-level change tracking in the working copy</li>
@@ -123,16 +123,15 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 </ul>
 </div>
 <div class="card">
-<h3>⚡ Performance</h3>
+<h3>Requirements</h3>
 <ul>
-<li>Written in Rust (zero-cost abstractions)</li>
 <li>SQLite bundled</li>
-<li>Requires <code>git</code> on PATH, and <code>git-lfs</code> for <code>lfs+</code></li>
-<li>6.9 MB dynamically linked binary</li>
+<li>Requires <code>git</code> on PATH, and <code>git-lfs</code> for <code>lfs+</code> and for point cloud and raster tiles</li>
+<li>Rust 1.88 or later to build</li>
 </ul>
 </div>
 <div class="card">
-<h3>📁 File & Document Support</h3>
+<h3>File and Document Support</h3>
 <ul>
 <li>Version arbitrary files alongside datasets</li>
 <li><code>ggt files add/ls/rm</code> commands</li>
@@ -142,7 +141,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;color
 </ul>
 </div>
 <div class="card">
-<h3>📋 Metadata & Licensing</h3>
+<h3>Metadata and Licensing</h3>
 <ul>
 <li>Attach XML metadata (ISO 19115, FGDC)</li>
 <li>License tracking per dataset</li>
@@ -199,17 +198,17 @@ ggt push origin master</pre>
 <tr><th>Command</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ggt init [dir] [--spatial-filter bbox]</code></td><td>Initialize a new GeoGit repository. A bbox filter is stored in <code>.geogit/spatial-filter.json</code> and limits which features are written to the working copy</td></tr>
-<tr><td><code>ggt clone &lt;url&gt; [--spatial-filter bbox]</code></td><td>Clone a remote repository</td></tr>
+<tr><td><code>ggt init [dir] [--import src] [--spatial-filter bbox]</code></td><td>Initialize a new GeoGit repository. A bbox filter is stored in <code>.geogit/spatial-filter.json</code> but excludes no features: the check reads only WKT text geometry, and every import stores GeoPackage binary</td></tr>
+<tr><td><code>ggt clone &lt;url&gt; [dest] [--spatial-filter bbox]</code></td><td>Clone a remote repository</td></tr>
 <tr><td><code>ggt import GPKG:file.gpkg</code></td><td>Import a GeoPackage, a Shapefile with <code>SHP:</code>, or a PostGIS database with a <code>postgresql://</code> connection string</td></tr>
 <tr><td><code>ggt status</code></td><td>Show working copy changes</td></tr>
-<tr><td><code>ggt diff [base] [target]</code></td><td>Feature-level diff of the working copy; with a target, changed blob paths only</td></tr>
-<tr><td><code>ggt commit -m "msg"</code></td><td>Commit working copy changes</td></tr>
+<tr><td><code>ggt diff [base] [target] [--stat]</code></td><td>Feature-level diff of the working copy. With a target, the changed blob paths between two commits</td></tr>
+<tr><td><code>ggt commit -m "msg" [datasets]</code></td><td>Commit working copy changes, optionally only the named datasets</td></tr>
 <tr><td><code>ggt log [--oneline] [-n N]</code></td><td>Show commit history</td></tr>
 <tr><td><code>ggt show [commit]</code></td><td>Display commit details</td></tr>
 <tr><td><code>ggt branch [name] [-d]</code></td><td>List/create/delete branches</td></tr>
 <tr><td><code>ggt switch &lt;branch&gt; [-c]</code></td><td>Switch branches</td></tr>
-<tr><td><code>ggt merge &lt;branch&gt; [--abort]</code></td><td>Merge a branch with plain <code>git merge</code>, feature-aware three-way merge is not implemented</td></tr>
+<tr><td><code>ggt merge &lt;branch&gt; [--abort] [--continue]</code></td><td>Merge a branch with plain <code>git merge</code>. Feature-aware three-way merge is not implemented</td></tr>
 <tr><td><code>ggt push [remote] [branch]</code></td><td>Push to a remote</td></tr>
 <tr><td><code>ggt pull [remote] [branch]</code></td><td>Pull from a remote</td></tr>
 <tr><td><code>ggt remote add|remove|ls</code></td><td>Manage remotes</td></tr>
@@ -217,7 +216,7 @@ ggt push origin master</pre>
 <tr><td><code>ggt restore &lt;datasets&gt;</code></td><td>Restore datasets from a commit</td></tr>
 <tr><td><code>ggt checkout [datasets]</code></td><td>Checkout tree to working copy</td></tr>
 <tr><td><code>ggt conflicts [ls|abort]</code></td><td>View/manage merge conflicts</td></tr>
-<tr><td><code>ggt resolve [paths]</code></td><td>Resolve conflicts</td></tr>
+<tr><td><code>ggt resolve [path] [--with strategy] [--ours] [--theirs]</code></td><td>Resolve conflicts with ours, theirs, ancestor or delete, all of them when no path is given</td></tr>
 <tr><td><code>ggt export &lt;ds&gt; &lt;path&gt; [--ref ref]</code></td><td>Export to GPKG/GeoJSON/CSV, or print the format names with <code>--list-formats</code></td></tr>
 <tr><td><code>ggt data ls|info|schema</code></td><td>Inspect datasets</td></tr>
 <tr><td><code>ggt files add|ls|rm</code></td><td>Manage versioned files</td></tr>
@@ -243,14 +242,14 @@ ggt push origin master</pre>
 <li>ColumnValue enum (Null, Bool, Integer, Float, Text, Blob)</li>
 <li>Legend: column ID mappings for stored features</li>
 <li>StoredFeature: MessagePack encode/decode</li>
-<li>PathStructure: integer & msgpack-hash schemes</li>
+<li>PathStructure: integer and msgpack/hash schemes</li>
 <li>GpkgGeometry: GeoPackage Binary format</li>
 </ul>
 </div>
 <div class="card">
 <h3>geogit-core</h3>
 <ul>
-<li>DatasetMeta: title, description, schema, path structure</li>
+<li>DatasetMeta: title, description, schema, path structure, CRS definitions</li>
 <li>FeatureDelta: Insert/Delete/Update with old/new values</li>
 <li>DiffResult with summary statistics</li>
 </ul>
@@ -277,9 +276,9 @@ ggt push origin master</pre>
 <div class="card">
 <h3>geogit-cli</h3>
 <ul>
-<li>29 commands covering the full workflow</li>
+<li>29 top-level commands</li>
 <li>Clap-derived argument parsing</li>
-<li>File datasets & metadata management</li>
+<li>File datasets and metadata management</li>
 <li>Progress bars (indicatif)</li>
 <li>Colored diff output</li>
 </ul>
@@ -288,10 +287,10 @@ ggt push origin master</pre>
 <h3>Storage Format</h3>
 <ul>
 <li>Standard Git repository (any hosting)</li>
-<li><code>.table-dataset/</code> — row-level geospatial data</li>
-<li><code>.file-dataset/</code> — versioned documents</li>
-<li><code>meta/metadata.xml</code> — ISO metadata</li>
-<li><code>meta/license</code> — license information</li>
+<li><code>.table-dataset/</code>: one blob per feature row</li>
+<li><code>.file-dataset/</code>: versioned documents</li>
+<li><code>meta/metadata.xml</code>: XML metadata</li>
+<li><code>meta/license</code>: licence text, or <code>meta/license.xml</code></li>
 </ul>
 </div>
 </div>
@@ -300,27 +299,26 @@ ggt push origin master</pre>
 
 <section>
 <div class="container">
-<h2>Comparison with Kart</h2>
+<h2>What Is Implemented</h2>
 <table>
 <thead>
-<tr><th>Feature</th><th>GeoGit</th><th>Kart</th></tr>
+<tr><th>Feature</th><th>GeoGit</th></tr>
 </thead>
 <tbody>
-<tr><td>Language</td><td>Rust</td><td>Python + C</td></tr>
-<tr><td>Binary size</td><td>6.9 MB (dynamically linked, requires git)</td><td>~200 MB (bundled Python)</td></tr>
-<tr><td>Storage format</td><td>Modelled on Kart, Kart repository interoperability not implemented</td><td>Kart</td></tr>
-<tr><td>GeoPackage WC</td><td>✓</td><td>✓</td></tr>
-<tr><td>PostGIS WC</td><td>Not implemented</td><td>✓</td></tr>
-<tr><td>Push/Pull</td><td>✓ (native Git)</td><td>✓</td></tr>
-<tr><td>Feature-level diff</td><td>Working copy only</td><td>✓</td></tr>
-<tr><td>Schema evolution</td><td>Not implemented</td><td>✓ (legends)</td></tr>
-<tr><td>File datasets</td><td>✓</td><td>Unverified</td></tr>
-<tr><td>XML Metadata</td><td>✓</td><td>Unverified</td></tr>
-<tr><td>License tracking</td><td>✓</td><td>Unverified</td></tr>
-<tr><td>Raster support</td><td>Import and inspect</td><td>✓</td></tr>
-<tr><td>Point cloud</td><td>Import and inspect</td><td>✓</td></tr>
-<tr><td>Platforms</td><td>Linux, macOS, Windows</td><td>Linux, macOS, Windows</td></tr>
-<tr><td>License</td><td>AGPL-3.0</td><td>GPL-2.0</td></tr>
+<tr><td>Storage format</td><td>Modelled on Kart's dataset v3, whole-repository interoperability untested</td></tr>
+<tr><td>GeoPackage working copy</td><td>Yes</td></tr>
+<tr><td>PostGIS working copy</td><td>Not implemented</td></tr>
+<tr><td>Push and pull</td><td>Yes, through Git</td></tr>
+<tr><td>Feature-level diff</td><td>Working copy only</td></tr>
+<tr><td>Feature-aware merge</td><td>Not implemented, <code>git merge</code> on whole blobs</td></tr>
+<tr><td>Schema evolution</td><td>Not implemented</td></tr>
+<tr><td>Spatial filter</td><td>Stored, excludes nothing</td></tr>
+<tr><td>File datasets</td><td>Yes</td></tr>
+<tr><td>XML metadata</td><td>Yes</td></tr>
+<tr><td>Licence tracking</td><td>Yes</td></tr>
+<tr><td>Raster</td><td>Import and inspect</td></tr>
+<tr><td>Point cloud</td><td>Import and inspect</td></tr>
+<tr><td>License</td><td>AGPL-3.0-or-later</td></tr>
 </tbody>
 </table>
 </div>

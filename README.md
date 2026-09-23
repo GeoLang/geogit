@@ -3,191 +3,212 @@
 [![CI](https://github.com/GeoLang/geogit/actions/workflows/ci.yml/badge.svg)](https://github.com/GeoLang/geogit/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-**Distributed version control for geospatial data.**
+Version control for geospatial data on top of Git.
 
-GeoGit brings Git-like branching, diffing, merging, and collaboration to geodata. Import GeoPackages, edit in QGIS, commit changes, push/pull between machines — all with row-level tracking.
+`ggt` imports GeoPackage, Shapefile and PostGIS tables into a Git repository as
+one blob per feature row. You edit a GeoPackage working copy in QGIS or any
+other GIS, and `ggt` turns the edits into commits. Branches, remotes, push and
+pull are plain Git.
+
+## Install
+
+A `v*` tag builds `ggt` for x86_64 and aarch64 Linux and macOS and uploads one
+tarball per target to [GitHub Releases](https://github.com/GeoLang/geogit/releases).
+To build from a checkout, with Rust 1.88 or later:
+
+```bash
+cargo build --release
+# binary at target/release/ggt
+```
+
+`ggt` runs the `git` on `PATH` for every repository operation, and `git-lfs` for
+`ggt lfs+` and for point cloud and raster tiles.
 
 ## Quick Start
 
 ```bash
-# Initialize a repo and import a GeoPackage
-ggt init myproject --import GPKG:parcels.gpkg
+# create a repository and import every feature and attribute table in a GeoPackage
+ggt init myproject
 cd myproject
-
-# Check status
+ggt import GPKG:../parcels.gpkg
 ggt status
-
-# Commit
 ggt commit -m "Initial import"
 
-# Branch and edit
-ggt branch feature/update-parcels
-ggt switch feature/update-parcels
-# ... edit the working copy GeoPackage in QGIS ...
+# branch and edit
+ggt switch -c update-parcels
+# edit myproject.gpkg, the working copy, in QGIS
+ggt diff
 ggt commit -m "Update parcel boundaries"
 
-# Merge
-ggt switch main
-ggt merge feature/update-parcels
+# merge back. The first branch is whatever git's init.defaultBranch names
+ggt switch master
+ggt merge update-parcels
 
-# Inspect data
+# inspect
 ggt data ls
 ggt data info parcels
 ggt data schema parcels
 
-# Export
+# export the committed dataset, format from the extension or a FORMAT: prefix
 ggt export parcels output.gpkg
 ggt export parcels output.geojson
-ggt export parcels output.csv
+ggt export parcels CSV:output.csv
 ```
 
-## File & Document Version Control
+`ggt export` reads the dataset as last committed or checked out, not uncommitted
+edits in the working copy.
 
-Version arbitrary files alongside geospatial datasets:
+## Files, Metadata and Licences
 
 ```bash
-# Add files to a file dataset
+# version arbitrary files, in the "files" dataset unless --dataset names another
 ggt files add report.pdf spec.docx
-
-# Add to a custom dataset
 ggt files add --dataset documents report.pdf
-
-# List tracked files
 ggt files ls
-
-# Remove a file
 ggt files rm report.pdf
 
-# Commit as usual
-ggt commit -m "Add project documents"
-```
-
-## Dataset Metadata & Licensing
-
-Attach ISO 19115 XML metadata and license information to any dataset:
-
-```bash
-# Set XML metadata (ISO 19115, FGDC, or any XML)
+# XML metadata (ISO 19115, FGDC, or any XML) on a table or file dataset
 ggt metadata set parcels metadata.xml
 ggt metadata show parcels
 
-# Set license (text or XML)
+# a licence as text, or as XML when the file starts with <
 ggt license set parcels LICENSE.txt
 ggt license show parcels
 
-# Works with both table and file datasets
-ggt metadata set documents meta.xml
+ggt commit -m "Add project documents"
 ```
 
 ## How It Works
 
-GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded blob inside a standard Git repository. The layout is modelled on [Kart](https://kartproject.org/). Geometry is a MessagePack extension of type 71 holding GeoPackage binary with SRS id 0, and the CRS of a vector dataset is written to `meta/crs/<identifier>.wkt`. A shapefile import takes that identifier from the authority in the `.prj` file. A GeoPackage import instead names the file `EPSG:` plus the srs id the source table numbers the CRS with, where Kart reads the code out of the WKT, so the two disagree on any GeoPackage that assigns its own srs ids. The working copy stamps a srs id into every geometry header, the EPSG code when the identifier carries one and otherwise the number Kart's hash of the identifier lands on, inside Kart's 200000 to 209199 custom range. Feature blobs taken from Kart's own test repositories decode and re-encode byte for byte, but no command has been run against a whole Kart repository.
+GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded
+blob inside a Git repository. The layout is modelled on
+[Kart](https://kartproject.org/)'s dataset v3. Geometry is a MessagePack
+extension of type 71 holding GeoPackage binary with srs id 0, and the CRS of a
+vector dataset is written to `meta/crs/<identifier>.wkt`.
+
+A Shapefile import takes that identifier from the authority in the `.prj` file.
+A GeoPackage import names the file `EPSG:` plus the srs id the source table uses,
+where Kart reads the code out of the WKT, so the two disagree on a GeoPackage
+that assigns its own srs ids. The working copy stamps a srs id into every
+geometry header: the EPSG code when the identifier has one, and otherwise the
+number Kart's hash of the identifier gives, in Kart's 200000 to 209199 custom
+range.
+
+Feature blobs from Kart's own test repositories decode and re-encode byte for
+byte. No command has been run against a whole Kart repository.
 
 ```
 myproject/
-├── .git/                       # Standard Git repository
-├── .gitignore                  # Excludes working copy (.gpkg)
+├── .git/
+├── .gitignore                  # *.gpkg, so the working copy is not committed
 ├── parcels/
 │   └── .table-dataset/
 │       ├── meta/
 │       │   ├── title
 │       │   ├── description
-│       │   ├── schema.json     # Column definitions
-│       │   ├── metadata.xml    # ISO 19115 metadata (optional)
-│       │   ├── license         # License text (optional)
+│       │   ├── schema.json
+│       │   ├── path-structure.json
+│       │   ├── metadata.xml    # from ggt metadata set
+│       │   ├── license         # from ggt license set, license.xml for XML
 │       │   ├── crs/            # CRS definitions in WKT, named by identifier
-│       │   └── legend/         # Column ID mappings for stored features
+│       │   └── legend/         # column id mappings for stored features
 │       └── feature/
-│           ├── A/A/A/B/kU0=    # Feature with PK=77
-│           └── ...             # One blob per row
+│           ├── A/A/A/B/kU0=    # the feature with primary key 77
+│           └── ...
 ├── documents/
 │   └── .file-dataset/
 │       ├── meta/
-│       │   ├── title
-│       │   └── metadata.xml    # Optional metadata
 │       └── files/
-│           ├── report.pdf      # Versioned files
+│           ├── report.pdf
 │           └── spec.docx
-└── myproject.gpkg              # Working copy (editable in QGIS)
+├── lidar/
+│   └── .point-cloud-dataset.v1/tile/   # tracked with git lfs when installed
+├── dem/
+│   └── .raster-dataset.v1/tile/        # tracked with git lfs when installed
+└── myproject.gpkg              # working copy
 ```
 
-**Key properties:**
-- **Git deduplication** — unchanged features share blobs across commits (zero cost)
-- **Efficient diffs** — compare blob OIDs, skip unchanged subtrees: O(changed) not O(total)
-- **Standard remotes** — push/pull to GitHub, GitLab, or any Git host
-- **Edit anywhere** — working copy is a GeoPackage, editable in any GIS software
-- **File tracking** — version documents and files alongside geodata
-- **Point clouds** — import and inspect LAS/LAZ point cloud tiles
-- **Raster datasets** — import and inspect GeoTIFF raster tiles
-- **Spatial filter**: a bbox given to `init` or `clone` is stored in `.geogit/spatial-filter.json` and limits which features are written to the working copy, tested against each feature's first coordinate
+- Unchanged features keep the same blob across commits, so Git stores them once.
+- The working copy is a GeoPackage. SQL triggers record inserts, updates and
+  deletes, and `ggt commit` writes those rows into the tree.
+- `ggt switch`, `merge`, `pull`, `reset` and `restore` rebuild the working copy
+  from the tree.
+- `ggt create-workingcopy <path>` puts the working copy at another path and
+  records it in `.geogit/workingcopy.json`.
 
-Schema evolution is not implemented. The dataset schema is written once at import and never rewritten, so a column added or dropped in the working copy is ignored at commit time.
+### Limits
+
+- **Merge** runs plain `git merge` on the feature blobs. There is no
+  feature-aware three-way merge, so two edits to the same feature conflict as
+  opaque binary blobs. `ggt resolve --with ours|theirs|ancestor|delete` or
+  `--ours`/`--theirs` picks a whole blob, then `ggt merge --continue` commits.
+- **Diff** between two commits lists changed blob paths only. Feature-level
+  diffs with old and new values cover the working copy against the last commit.
+- **Schema evolution** is not implemented. The schema is written once at import,
+  so a column added or dropped in the working copy is ignored at commit time.
+- **Spatial filter** (`--spatial-filter minx,miny,maxx,maxy` on `init` and
+  `clone`) is stored in `.geogit/spatial-filter.json` but excludes nothing. The
+  check reads only WKT text geometry, and every import stores GeoPackage binary.
+- **PostGIS working copies** are not implemented. `create-workingcopy` refuses a
+  `postgresql://` target.
 
 ## Supported Formats
 
 | Format | Import | Export |
 |--------|--------|--------|
-| GeoPackage (.gpkg) | ✅ | ✅ |
-| Shapefile (.shp) | ✅ Geometry and .dbf attributes | — |
-| GeoJSON | — | ✅ |
-| CSV | — | ✅ |
-| PostGIS | Every table listed in `geometry_columns`, with typed column values. Untested against a live database | — |
-| Files (any) | ✅ | ✅ |
-| LAS/LAZ (point cloud) | ✅ | — |
-| GeoTIFF (raster) | ✅ | — |
+| GeoPackage (.gpkg) | every feature and attribute table | yes |
+| Shapefile (.shp) | geometry and .dbf attributes | no |
+| PostGIS | every table in `geometry_columns`, untested against a live database | no |
+| GeoJSON | no | yes |
+| CSV | no | yes |
+| Any file | `ggt files add`, stored as is | read from `<dataset>/.file-dataset/files/` |
+| LAS/LAZ point cloud | `ggt pointcloud import` | no |
+| GeoTIFF raster | `ggt raster import` | no |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `ggt init [dir] [--import SRC] [--spatial-filter BBOX]` | Initialize a new repository |
-| `ggt clone <url> [--spatial-filter BBOX]` | Clone a remote repository |
-| `ggt import GPKG:file.gpkg` | Import a GeoPackage, `SHP:file.shp`, or a `postgresql://` connection string |
+| `ggt init [dir] [--import SRC] [--spatial-filter BBOX]` | Create a repository, optionally importing `SRC`. A relative `SRC` path resolves against `dir`, not the current directory |
+| `ggt clone <url> [dest] [--spatial-filter BBOX]` | Clone a remote repository |
+| `ggt import <SRC> [--name NAME]` | Import `GPKG:file.gpkg`, `SHP:file.shp` or a `postgresql://` connection string. A bare `.gpkg` or `.shp` path also works |
 | `ggt status` | Show working copy changes |
-| `ggt diff [base] [target]` | Feature-level diff of the working copy; with a target, lists changed blob paths only |
-| `ggt commit -m "msg"` | Commit changes |
+| `ggt diff [--stat]` | Feature-level diff of the working copy |
+| `ggt diff <base> <target> [--stat]` | Changed blob paths between two commits |
+| `ggt commit -m "msg" [datasets]` | Commit working copy changes, optionally only the named datasets |
 | `ggt log [--oneline] [-n N]` | Show commit history |
-| `ggt show [commit]` | Display commit details |
-| `ggt branch [name] [-d]` | List/create/delete branches |
-| `ggt switch <branch> [-c]` | Switch branches |
-| `ggt merge <branch> [--abort] [--continue]` | Merge a branch with plain `git merge`. Feature-aware three-way merge is not implemented, so two edits to the same feature conflict as opaque binary blobs |
-| `ggt push [remote] [branch]` | Push to a remote |
-| `ggt pull [remote] [branch]` | Pull from a remote |
+| `ggt show [commit]` | Show a commit |
+| `ggt branch [name] [-d]` | List, create or delete branches |
+| `ggt switch <branch> [-c]` | Switch branches, `-c` creates the branch |
+| `ggt merge <branch> [--abort] [--continue]` | Merge a branch with `git merge` |
+| `ggt push [remote] [branch]` | Push, `origin` by default |
+| `ggt pull [remote] [branch]` | Pull, `origin` by default |
 | `ggt remote add\|remove\|ls` | Manage remotes |
-| `ggt reset [target]` | Reset to a commit |
-| `ggt restore <datasets>` | Restore datasets from a commit |
-| `ggt checkout [datasets]` | Checkout tree to working copy |
-| `ggt export <ds> <path> [--ref REF]` | Export to GPKG/GeoJSON/CSV, `--list-formats` prints the format names |
+| `ggt reset [target]` | `git reset --hard` to a commit and rebuild the working copy |
+| `ggt restore <datasets> [--source REF]` | Restore datasets from a commit |
+| `ggt checkout [datasets]` | Write datasets from the tree into the working copy |
+| `ggt create-workingcopy <path>` | Create the GeoPackage working copy at `<path>` |
+| `ggt conflicts [ls\|abort]` | List merge conflicts or abort the merge |
+| `ggt resolve [path] [--with STRATEGY] [--ours] [--theirs]` | Resolve conflicts, all of them when no path is given |
+| `ggt export <ds> <path> [--ref REF]` | Export to GPKG, GeoJSON or CSV. `--list-formats` prints the format names |
 | `ggt data ls\|info\|schema` | Inspect datasets |
 | `ggt files add\|ls\|rm` | Manage versioned files |
 | `ggt metadata set\|show` | Dataset XML metadata |
-| `ggt license set\|show` | Dataset license management |
+| `ggt license set\|show` | Dataset licence |
 | `ggt pointcloud import\|ls\|info` | Point cloud datasets (LAS/LAZ) |
 | `ggt raster import\|ls\|info` | Raster datasets (GeoTIFF) |
-| `ggt conflicts [ls\|abort]` | View/manage merge conflicts |
-| `ggt resolve [paths]` | Resolve conflicts |
-| `ggt create-workingcopy <path>` | Create the GeoPackage working copy at `<path>`, recorded in `.geogit/workingcopy.json` so status, commit, diff and checkout read it. PostGIS targets are refused |
-| `ggt lfs+ ls-files\|fetch\|gc` | Manage Git LFS objects |
-| `ggt version` | Show version information |
+| `ggt lfs+ ls-files\|fetch\|gc` | Git LFS objects: list, fetch from `origin`, prune |
+| `ggt version` | Show the version |
 
-## Building
-
-```bash
-cargo build --release
-# Binary at target/release/ggt
-```
-
-## Architecture
-
-Five Rust crates in a workspace:
+## Crates
 
 | Crate | Purpose |
 |-------|---------|
-| `geogit-encoding` | MessagePack feature encoding, geometry, paths, schemas |
-| `geogit-core` | Dataset model, diff engine |
-| `geogit-git` | Git object storage via shell git |
-| `geogit-wc` | GeoPackage working copy |
-| `geogit` (CLI) | Command-line interface (`ggt`) via [clap](https://github.com/clap-rs/clap) |
+| `geogit-encoding` | MessagePack feature encoding, geometry, paths, schemas, CRS |
+| `geogit-core` | Dataset model and feature diffs |
+| `geogit-git` | Git object storage through the `git` command |
+| `geogit-wc` | GeoPackage working copy and change tracking |
+| `geogit` | The `ggt` binary |
 
 ## License
 
