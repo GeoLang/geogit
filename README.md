@@ -142,13 +142,19 @@ myproject/
   feature-aware three-way merge, so two edits to the same feature conflict as
   opaque binary blobs. `ggt resolve --with ours|theirs|ancestor|delete` or
   `--ours`/`--theirs` picks a whole blob, then `ggt merge --continue` commits.
+  `ggt resolve <path> --with-file feature.geojson` stores one GeoJSON feature
+  as the resolved feature instead.
 - **Diff** between two commits lists changed blob paths only. Feature-level
   diffs with old and new values cover the working copy against the last commit.
+  Dataset names after `--` limit either diff to those datasets. A `dataset:pk`
+  filter limits it to the dataset, not the feature.
 - **Schema evolution** is not implemented. The schema is written once at import,
   so a column added or dropped in the working copy is ignored at commit time.
 - **Spatial filter** (`--spatial-filter minx,miny,maxx,maxy` on `init` and
-  `clone`) is stored in `.geogit/spatial-filter.json` but excludes nothing. The
-  check reads only WKT text geometry, and every import stores GeoPackage binary.
+  `clone`) is stored in `.geogit/spatial-filter.json`. Imports, `checkout` and
+  every working copy rebuild leave out features whose bounding box misses the
+  bbox. The tree keeps every feature. The bbox is compared in the dataset's own
+  CRS, with no reprojection.
 - **PostGIS working copies** are not implemented. `create-workingcopy` refuses a
   `postgresql://` target.
 
@@ -173,8 +179,8 @@ myproject/
 | `ggt clone <url> [dest] [--spatial-filter BBOX]` | Clone a remote repository |
 | `ggt import <SRC> [--name NAME]` | Import `GPKG:file.gpkg`, `SHP:file.shp` or a `postgresql://` connection string. A bare `.gpkg` or `.shp` path also works |
 | `ggt status` | Show working copy changes |
-| `ggt diff [--stat]` | Feature-level diff of the working copy |
-| `ggt diff <base> <target> [--stat]` | Changed blob paths between two commits |
+| `ggt diff [--stat] [-- DATASETS]` | Feature-level diff of the working copy |
+| `ggt diff <base> <target> [--stat] [-- DATASETS]` | Changed blob paths between two commits |
 | `ggt commit -m "msg" [datasets]` | Commit working copy changes, optionally only the named datasets |
 | `ggt log [--oneline] [-n N]` | Show commit history |
 | `ggt show [commit]` | Show a commit |
@@ -189,8 +195,8 @@ myproject/
 | `ggt checkout [datasets]` | Write datasets from the tree into the working copy |
 | `ggt create-workingcopy <path>` | Create the GeoPackage working copy at `<path>` |
 | `ggt conflicts [ls\|abort]` | List merge conflicts or abort the merge |
-| `ggt resolve [path] [--with STRATEGY] [--ours] [--theirs]` | Resolve conflicts, all of them when no path is given |
-| `ggt export <ds> <path> [--ref REF]` | Export to GPKG, GeoJSON or CSV. `--list-formats` prints the format names |
+| `ggt resolve [path] [--with STRATEGY] [--ours] [--theirs] [--with-file FILE]` | Resolve conflicts, all of them when no path is given. `--with-file` needs a feature path and a GeoJSON feature |
+| `ggt export <ds> <path> [--ref REF]` | Export to GPKG, GeoJSON or CSV. `--ref` reads the schema, CRS and features from `REF`. `--list-formats` prints the format names |
 | `ggt data ls\|info\|schema` | Inspect datasets |
 | `ggt files add\|ls\|rm` | Manage versioned files |
 | `ggt metadata set\|show` | Dataset XML metadata |

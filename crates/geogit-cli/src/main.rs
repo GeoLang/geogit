@@ -92,8 +92,8 @@ enum Command {
         target: Option<String>,
         #[arg(long)]
         stat: bool,
-        /// Filter: dataset or dataset:pk
-        #[arg(trailing_var_arg = true)]
+        /// Only diff these datasets, given after `--` (dataset or dataset:pk, the pk is not used)
+        #[arg(last = true)]
         filters: Vec<String>,
     },
     /// List, create, or delete branches
@@ -396,8 +396,8 @@ fn main() -> Result<()> {
             base,
             target,
             stat,
-            filters: _,
-        } => cmd_diff(&base, target.as_deref(), stat),
+            filters,
+        } => cmd_diff(&base, target.as_deref(), stat, &filters),
         Command::Branch { name, delete } => cmd_branch(name.as_deref(), delete),
         Command::Switch { branch, create } => cmd_switch(&branch, create),
         Command::Merge {
@@ -586,6 +586,26 @@ fn read_crs_definitions(meta_dir: &Path) -> BTreeMap<String, String> {
     definitions
 }
 
+fn read_crs_definitions_at(
+    repo: &Repository,
+    reference: &str,
+    crs_dir: &str,
+) -> Result<BTreeMap<String, String>> {
+    let mut definitions = BTreeMap::new();
+    for file_name in repo.ls_tree(reference, crs_dir)? {
+        let Some(identifier) = file_name.strip_suffix(".wkt") else {
+            continue;
+        };
+        if let Some(definition) = repo.read_file_at(reference, &format!("{crs_dir}/{file_name}"))? {
+            definitions.insert(
+                identifier.to_string(),
+                String::from_utf8_lossy(&definition).into_owned(),
+            );
+        }
+    }
+    Ok(definitions)
+}
+
 fn read_gpkg_crs_definitions(
     conn: &rusqlite::Connection,
     table_name: &str,
@@ -742,15 +762,12 @@ fn refresh_working_copy(root: &Path, wc_gpkg: &Path) -> Result<()> {
     if datasets.is_empty() {
         return Ok(());
     }
-    let spatial_filter = load_spatial_filter(root);
     let mut wc = GeoPackageWorkingCopy::open(wc_gpkg)?;
     for ds in &datasets {
         let meta = load_dataset_meta(root, ds)?;
         let feature_dir = root.join(ds).join(".table-dataset/feature");
         let mut features = load_features_from_tree(&feature_dir, &meta)?;
-        if let Some(ref bbox) = spatial_filter {
-            features.retain(|(_pk, vals)| feature_in_bbox(vals, &meta.schema, bbox));
-        }
+        retain_features_in_spatial_filter(root, &meta.schema, &mut features);
         wc.checkout(ds, &meta, &features)?;
     }
     Ok(())
@@ -777,52 +794,31 @@ fn load_spatial_filter(root: &Path) -> Option<(f64, f64, f64, f64)> {
     }
 }
 
-/// Check if a feature's geometry column value falls within the given bbox.
-/// Uses a simple text-based check for Point geometries or WKT-based parsing.
+fn retain_features_in_spatial_filter(root: &Path, schema: &Schema, features: &mut Vec<FeatureRow>) {
+    if let Some(bbox) = load_spatial_filter(root) {
+        features.retain(|(_pk, values)| feature_in_bbox(values, schema, &bbox));
+    }
+}
+
+// null, empty and unreadable geometries stay in
 fn feature_in_bbox(
     values: &HashMap<String, ColumnValue>,
     schema: &Schema,
     bbox: &(f64, f64, f64, f64),
 ) -> bool {
-    let geom_col = schema.0.iter().find(|c| c.data_type == DataType::Geometry);
-    let Some(gc) = geom_col else { return true };
-    let Some(val) = values.get(&gc.name) else {
+    let (min_x, min_y, max_x, max_y) = *bbox;
+    let Some(geometry_column) = schema.0.iter().find(|c| c.data_type == DataType::Geometry) else {
         return true;
     };
-    match val {
-        ColumnValue::Text(wkt) => {
-            // Simple check: extract coordinates from POINT(x y) or first coord
-            if let Some(coords) = extract_first_coord(wkt) {
-                coords.0 >= bbox.0 && coords.0 <= bbox.2 && coords.1 >= bbox.1 && coords.1 <= bbox.3
-            } else {
-                true // Can't parse, include by default
-            }
-        }
-        ColumnValue::Blob(data) => {
-            // For WKB geometry blobs, we'd need to parse - for now include all
-            let _ = data;
-            true
-        }
-        _ => true,
-    }
-}
-
-/// Extract the first (x, y) coordinate from a WKT string.
-fn extract_first_coord(wkt: &str) -> Option<(f64, f64)> {
-    // Find the first opening paren or "POINT " prefix
-    let pos = wkt.find('(')?;
-    let coord_str = &wkt[pos + 1..];
-    // Get first coordinate pair before ) or ,
-    let end = coord_str.find([',', ')'])?;
-    let pair = &coord_str[..end];
-    let parts: Vec<&str> = pair.split_whitespace().collect();
-    if parts.len() >= 2 {
-        let x = parts[0].parse().ok()?;
-        let y = parts[1].parse().ok()?;
-        Some((x, y))
-    } else {
-        None
-    }
+    let Some(ColumnValue::Geometry(geometry) | ColumnValue::Blob(geometry)) =
+        values.get(&geometry_column.name)
+    else {
+        return true;
+    };
+    let Ok(bounds) = geogit_encoding::geometry::gpkg_geometry_bounds(geometry) else {
+        return true;
+    };
+    bounds.min_x <= max_x && bounds.max_x >= min_x && bounds.min_y <= max_y && bounds.max_y >= min_y
 }
 
 fn load_dataset_meta(root: &Path, ds: &str) -> Result<DatasetMeta> {
@@ -1210,12 +1206,13 @@ fn import_gpkg(gpkg_path: &Path, dataset_name: Option<&str>) -> Result<()> {
         builder.import_dataset(ds_name, &meta, &features)?;
         let wc_gpkg_path = wc_path(&repo_root)?;
         let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
+        retain_features_in_spatial_filter(&repo_root, &meta.schema, &mut wc_features);
         wc.checkout(ds_name, &meta, &wc_features)?;
         bar.set_position(features.len() as u64);
         bar.finish_and_clear();
         println!("Imported {ds_name} ({} features)", features.len());
     }
-    println!("\nUse `geogit commit -m \"Initial import\"` to create the first commit.");
+    println!("\nUse `ggt commit -m \"Initial import\"` to create the first commit.");
     Ok(())
 }
 
@@ -1487,13 +1484,14 @@ fn import_shapefile(shp_path: &Path, dataset_name: Option<&str>) -> Result<()> {
 
     let wc_gpkg_path = wc_path(&repo_root)?;
     let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
+    retain_features_in_spatial_filter(&repo_root, &meta.schema, &mut wc_features);
     wc.checkout(ds_name, &meta, &wc_features)?;
 
     println!(
         "Imported {ds_name} ({} features from Shapefile)",
         features.len()
     );
-    println!("Use `geogit commit -m \"Import {ds_name}\"` to commit.");
+    println!("Use `ggt commit -m \"Import {ds_name}\"` to commit.");
     Ok(())
 }
 
@@ -1547,6 +1545,54 @@ impl TypedRow for tokio_postgres::Row {
     fn get_blob(&self, name: &str) -> Option<Vec<u8>> {
         self.try_get::<_, Option<Vec<u8>>>(name).ok().flatten()
     }
+}
+
+impl TypedRow for serde_json::Map<String, serde_json::Value> {
+    fn get_bool(&self, name: &str) -> Option<bool> {
+        self.get(name)?.as_bool()
+    }
+
+    fn get_i64(&self, name: &str) -> Option<i64> {
+        self.get(name)?.as_i64()
+    }
+
+    fn get_f64(&self, name: &str) -> Option<f64> {
+        self.get(name)?.as_f64()
+    }
+
+    fn get_text(&self, name: &str) -> Option<String> {
+        self.get(name)?.as_str().map(str::to_string)
+    }
+
+    fn get_blob(&self, _name: &str) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+fn geojson_feature_values(
+    feature: &serde_json::Value,
+    schema: &Schema,
+) -> Result<HashMap<String, ColumnValue>> {
+    let no_properties = serde_json::Map::new();
+    let properties = feature
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&no_properties);
+    schema
+        .0
+        .iter()
+        .map(|column| {
+            let value = match (column.data_type, feature.get("geometry")) {
+                (DataType::Geometry, None | Some(serde_json::Value::Null)) => ColumnValue::Null,
+                (DataType::Geometry, Some(geometry)) => ColumnValue::Geometry(
+                    geogit_encoding::geometry::geojson_to_gpkg_bytes(geometry)
+                        .with_context(|| format!("invalid GeoJSON geometry: {geometry}"))?,
+                ),
+                (data_type, _) => read_typed_column(data_type, properties, &column.name),
+            };
+            Ok((column.name.clone(), value))
+        })
+        .collect()
 }
 
 fn read_typed_column(data_type: DataType, row: &impl TypedRow, name: &str) -> ColumnValue {
@@ -1807,6 +1853,7 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
 
             let wc_gpkg_path = wc_path(&repo_root)?;
             let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg_path)?;
+            retain_features_in_spatial_filter(&repo_root, &meta.schema, &mut wc_features);
             wc.checkout(ds_name, &meta, &wc_features)?;
 
             println!(
@@ -1814,7 +1861,7 @@ fn import_postgis(conn_str: &str, dataset_name: Option<&str>) -> Result<()> {
                 features.len()
             );
         }
-        println!("Use `geogit commit -m \"Import from PostGIS\"` to commit.");
+        println!("Use `ggt commit -m \"Import from PostGIS\"` to commit.");
         Ok(())
     })
 }
@@ -1827,7 +1874,7 @@ fn cmd_status() -> Result<()> {
         .unwrap_or_else(|| "HEAD detached".into());
     println!("On branch {branch}");
     if root.join(".git/MERGE_HEAD").exists() {
-        println!("  (merge in progress — resolve conflicts then `geogit merge --continue`)");
+        println!("  (merge in progress — resolve conflicts then `ggt merge --continue`)");
     }
     let wc_gpkg = wc_path(&root)?;
     if wc_gpkg.exists() {
@@ -1857,7 +1904,7 @@ fn cmd_status() -> Result<()> {
             println!("Nothing to commit, working copy clean");
         }
     } else {
-        println!("No working copy. Use `geogit checkout` to create one.");
+        println!("No working copy. Use `ggt checkout` to create one.");
     }
     Ok(())
 }
@@ -1909,11 +1956,20 @@ fn cmd_show(commit: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_diff(base: &str, target: Option<&str>, stat: bool) -> Result<()> {
+fn matches_diff_filters(filters: &[String], path: &str) -> bool {
+    filters.is_empty()
+        || filters.iter().any(|filter| {
+            let dataset = filter.split(':').next().unwrap_or(filter);
+            path == dataset || path.starts_with(&format!("{dataset}/"))
+        })
+}
+
+fn cmd_diff(base: &str, target: Option<&str>, stat: bool, filters: &[String]) -> Result<()> {
     let root = find_repo_root()?;
     let repo = Repository::open(&root)?;
     if let Some(target) = target {
-        let entries = repo.diff_tree(base, target)?;
+        let mut entries = repo.diff_tree(base, target)?;
+        entries.retain(|entry| matches_diff_filters(filters, &entry.path));
         if entries.is_empty() {
             println!("No differences.");
         } else {
@@ -1925,7 +1981,10 @@ fn cmd_diff(base: &str, target: Option<&str>, stat: bool) -> Result<()> {
             let wc = GeoPackageWorkingCopy::open(&wc_gpkg)?;
             let datasets = wc.list_datasets()?;
             let mut any = false;
-            for ds in &datasets {
+            for ds in datasets
+                .iter()
+                .filter(|ds| matches_diff_filters(filters, ds))
+            {
                 let changes = wc.status(ds)?;
                 if changes.is_empty() {
                     continue;
@@ -1949,7 +2008,8 @@ fn cmd_diff(base: &str, target: Option<&str>, stat: bool) -> Result<()> {
                 println!("Nothing to diff, working copy clean.");
             }
         } else {
-            let entries = repo.diff_working()?;
+            let mut entries = repo.diff_working()?;
+            entries.retain(|entry| matches_diff_filters(filters, &entry.path));
             if entries.is_empty() {
                 println!("No differences.");
             } else {
@@ -2088,7 +2148,7 @@ fn cmd_merge(branch: &str, abort: bool, cont: bool) -> Result<()> {
             for c in &result.conflicts {
                 println!("  {c}");
             }
-            println!("\nResolve with `geogit resolve` then `geogit merge --continue`.");
+            println!("\nResolve with `ggt resolve` then `ggt merge --continue`.");
         }
     }
     Ok(())
@@ -2184,7 +2244,6 @@ fn cmd_checkout(datasets: &[String]) -> Result<()> {
         bail!("No datasets found. Import data first.");
     }
 
-    let spatial_filter = load_spatial_filter(&root);
     let mut wc = GeoPackageWorkingCopy::open(&wc_gpkg)?;
     for ds in &ds_list {
         let meta_dir = root.join(ds).join(".table-dataset/meta");
@@ -2195,16 +2254,14 @@ fn cmd_checkout(datasets: &[String]) -> Result<()> {
         let meta = load_dataset_meta(&root, ds)?;
         let feature_dir = root.join(ds).join(".table-dataset/feature");
         let mut features = load_features_from_tree(&feature_dir, &meta)?;
-        if let Some(ref bbox) = spatial_filter {
-            let before = features.len();
-            features.retain(|(_pk, vals)| feature_in_bbox(vals, &meta.schema, bbox));
-            if features.len() < before {
-                println!(
-                    "  (spatial filter applied: {} of {} features)",
-                    features.len(),
-                    before
-                );
-            }
+        let before = features.len();
+        retain_features_in_spatial_filter(&root, &meta.schema, &mut features);
+        if features.len() < before {
+            println!(
+                "  (spatial filter applied: {} of {} features)",
+                features.len(),
+                before
+            );
         }
         wc.checkout(ds, &meta, &features)?;
         println!("Checked out {ds} ({} features)", features.len());
@@ -2264,17 +2321,33 @@ fn cmd_resolve(
     // Handle --with-file (GeoJSON resolution)
     if let Some(file_path) = with_file {
         let conflict = conflict.context("must specify conflict path with --with-file")?;
+        let (dataset, _) = conflict
+            .split_once("/.table-dataset/feature/")
+            .with_context(|| format!("{conflict} is not a feature path"))?;
+        let meta = load_dataset_meta(&root, dataset)?;
         let geojson = std::fs::read_to_string(file_path)
             .with_context(|| format!("failed to read {}", file_path.display()))?;
-        // Parse GeoJSON and write features to the conflict path
         let parsed: serde_json::Value =
             serde_json::from_str(&geojson).context("invalid GeoJSON")?;
-        // Write the GeoJSON content directly to the conflict file to resolve it
+        let feature = match parsed.get("type").and_then(serde_json::Value::as_str) {
+            Some("Feature") => &parsed,
+            Some("FeatureCollection") => match parsed["features"].as_array().map(Vec::as_slice) {
+                Some([feature]) => feature,
+                _ => bail!("{} must hold exactly one feature", file_path.display()),
+            },
+            _ => bail!("{} is not a GeoJSON Feature", file_path.display()),
+        };
+        let values = geojson_feature_values(feature, &meta.schema)?;
+        let legend_ids = meta.schema.value_columns().iter().map(|c| c.id).collect();
+        let stored = StoredFeature {
+            legend_hash: Legend::new(legend_ids).hash(),
+            values: stored_values(&meta.schema, &values)?,
+        };
         let conflict_path = root.join(conflict);
         if let Some(parent) = conflict_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&conflict_path, serde_json::to_string_pretty(&parsed)?)
+        std::fs::write(&conflict_path, stored.to_msgpack())
             .with_context(|| format!("failed to write resolution to {conflict}"))?;
         // Stage the resolved file
         repo.resolve_conflicts(&[conflict])?;
@@ -2399,7 +2472,11 @@ fn cmd_export(
             description: String::new(),
             schema,
             path_structure: ps,
-            crs_definitions: BTreeMap::new(),
+            crs_definitions: read_crs_definitions_at(
+                &repo,
+                ref_name,
+                &format!("{dataset}/.table-dataset/meta/crs"),
+            )?,
         };
         // For ref-based export, we need to checkout to a temp dir
         let tmp = std::env::temp_dir().join(format!("geogit-export-{}", std::process::id()));

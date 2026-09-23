@@ -8,6 +8,7 @@
 //! - Points and empty geometries have no envelope
 
 use crate::value::ColumnValue;
+use geozero::geojson::GeoJson;
 use geozero::wkb::{GpkgWkb, Wkb};
 use geozero::wkt::Wkt;
 use geozero::{CoordDimensions, GeomProcessor, GeozeroGeometry, ToJson, ToWkb};
@@ -396,12 +397,48 @@ pub fn geometry_value_from_wkt(wkt: &str) -> ColumnValue {
 /// Convert WKT into GeoPackage Binary bytes.
 pub fn wkt_to_gpkg_bytes(wkt: &str) -> Option<Vec<u8>> {
     let wkb = Wkt(wkt).to_wkb(CoordDimensions::xy()).ok()?;
-    let envelope_type = desired_envelope_type(LITTLE_ENDIAN_FLAG, &wkb).ok()?;
+    gpkg_bytes_from_wkb(&wkb)
+}
+
+pub fn geojson_to_gpkg_bytes(geometry: &serde_json::Value) -> Option<Vec<u8>> {
+    let wkb = GeoJson(&geometry.to_string())
+        .to_wkb(CoordDimensions::xy())
+        .ok()?;
+    gpkg_bytes_from_wkb(&wkb)
+}
+
+fn gpkg_bytes_from_wkb(wkb: &[u8]) -> Option<Vec<u8>> {
+    let envelope_type = desired_envelope_type(LITTLE_ENDIAN_FLAG, wkb).ok()?;
     let envelope = match envelope_type {
         EnvelopeType::None => None,
-        _ => Some(measure_envelope(&wkb, envelope_type).ok()?),
+        _ => Some(measure_envelope(wkb, envelope_type).ok()?),
     };
-    Some(GpkgGeometry::from_wkb(&wkb, envelope).data)
+    Some(GpkgGeometry::from_wkb(wkb, envelope).data)
+}
+
+pub fn gpkg_geometry_bounds(data: &[u8]) -> Result<Envelope, GeometryError> {
+    let flags = header_flags(data)?;
+    let offset = wkb_offset(data)?;
+    if EnvelopeType::from_flags(flags)? == EnvelopeType::None {
+        return measure_envelope(&data[offset..], EnvelopeType::Xy);
+    }
+    let envelope_value = |index: usize| -> Result<f64, GeometryError> {
+        let start = HEADER_SIZE + index * 8;
+        let bytes: [u8; 8] = data[start..start + 8]
+            .try_into()
+            .map_err(|_| GeometryError::TooShort)?;
+        Ok(if flags & LITTLE_ENDIAN_FLAG != 0 {
+            f64::from_le_bytes(bytes)
+        } else {
+            f64::from_be_bytes(bytes)
+        })
+    };
+    Ok(Envelope::xy(
+        envelope_value(0)?,
+        envelope_value(1)?,
+        envelope_value(2)?,
+        envelope_value(3)?,
+    ))
 }
 
 fn wkt_to_geojson(wkt: &str) -> serde_json::Value {
@@ -532,6 +569,33 @@ mod tests {
         assert_eq!(
             EnvelopeType::from_flags(stored[3]).unwrap(),
             EnvelopeType::None
+        );
+    }
+
+    #[test]
+    fn test_bounds_of_a_polygon_come_from_its_envelope() {
+        let stored = wkt_to_gpkg_bytes("POLYGON((0 0,3 0,3 4,0 4,0 0))").unwrap();
+        assert_eq!(
+            gpkg_geometry_bounds(&stored).unwrap(),
+            Envelope::xy(0.0, 3.0, 0.0, 4.0)
+        );
+    }
+
+    #[test]
+    fn test_bounds_of_a_point_without_an_envelope() {
+        let stored = GpkgGeometry::from_wkb(&point_wkb(10.0, -20.0), None).data;
+        assert_eq!(
+            gpkg_geometry_bounds(&stored).unwrap(),
+            Envelope::xy(10.0, 10.0, -20.0, -20.0)
+        );
+    }
+
+    #[test]
+    fn test_geojson_geometry_encodes_like_wkt() {
+        let geometry = serde_json::json!({"type": "Point", "coordinates": [1.0, 2.0]});
+        assert_eq!(
+            geojson_to_gpkg_bytes(&geometry),
+            wkt_to_gpkg_bytes("POINT(1 2)")
         );
     }
 

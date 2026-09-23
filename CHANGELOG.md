@@ -20,6 +20,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-23: `ggt resolve <path> --with-file` encodes the GeoJSON feature the
+  way an import does, as a MessagePack feature with GeoPackage binary geometry.
+  It used to write the GeoJSON text over the feature blob.
+- 2026-09-23: `ggt export --ref` writes the ref's CRS definitions into the
+  export. It used to export with no CRS.
+- 2026-09-23: `ggt diff` limits its output to the datasets named after `--`. It
+  used to parse the names and ignore them.
+- 2026-09-23: The spatial filter excludes features. Imports, `checkout` and
+  working copy rebuilds compare each geometry's bounding box with the bbox,
+  taken from the GeoPackage binary envelope or measured from the WKB for
+  points. It used to read only WKT text geometry, which no import stores.
+- 2026-09-23: CLI hints name the `ggt` binary instead of `geogit`.
 - 2026-09-16: Stored features follow the Kart dataset v3 encoding. Geometry is a
   MessagePack extension of type 71 instead of an array of integers, blobs are
   MessagePack binary, a geometry taken from a source GeoPackage is rewritten

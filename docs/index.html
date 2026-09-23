@@ -198,11 +198,11 @@ ggt push origin master</pre>
 <tr><th>Command</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ggt init [dir] [--import src] [--spatial-filter bbox]</code></td><td>Initialize a new GeoGit repository. A bbox filter is stored in <code>.geogit/spatial-filter.json</code> but excludes no features: the check reads only WKT text geometry, and every import stores GeoPackage binary</td></tr>
+<tr><td><code>ggt init [dir] [--import src] [--spatial-filter bbox]</code></td><td>Initialize a new GeoGit repository. A bbox filter is stored in <code>.geogit/spatial-filter.json</code>, and the working copy leaves out features whose bounding box misses it. The tree keeps every feature</td></tr>
 <tr><td><code>ggt clone &lt;url&gt; [dest] [--spatial-filter bbox]</code></td><td>Clone a remote repository</td></tr>
 <tr><td><code>ggt import GPKG:file.gpkg</code></td><td>Import a GeoPackage, a Shapefile with <code>SHP:</code>, or a PostGIS database with a <code>postgresql://</code> connection string</td></tr>
 <tr><td><code>ggt status</code></td><td>Show working copy changes</td></tr>
-<tr><td><code>ggt diff [base] [target] [--stat]</code></td><td>Feature-level diff of the working copy. With a target, the changed blob paths between two commits</td></tr>
+<tr><td><code>ggt diff [base] [target] [--stat] [-- datasets]</code></td><td>Feature-level diff of the working copy. With a target, the changed blob paths between two commits. Dataset names after <code>--</code> limit the diff to those datasets</td></tr>
 <tr><td><code>ggt commit -m "msg" [datasets]</code></td><td>Commit working copy changes, optionally only the named datasets</td></tr>
 <tr><td><code>ggt log [--oneline] [-n N]</code></td><td>Show commit history</td></tr>
 <tr><td><code>ggt show [commit]</code></td><td>Display commit details</td></tr>
@@ -216,8 +216,8 @@ ggt push origin master</pre>
 <tr><td><code>ggt restore &lt;datasets&gt;</code></td><td>Restore datasets from a commit</td></tr>
 <tr><td><code>ggt checkout [datasets]</code></td><td>Checkout tree to working copy</td></tr>
 <tr><td><code>ggt conflicts [ls|abort]</code></td><td>View/manage merge conflicts</td></tr>
-<tr><td><code>ggt resolve [path] [--with strategy] [--ours] [--theirs]</code></td><td>Resolve conflicts with ours, theirs, ancestor or delete, all of them when no path is given</td></tr>
-<tr><td><code>ggt export &lt;ds&gt; &lt;path&gt; [--ref ref]</code></td><td>Export to GPKG/GeoJSON/CSV, or print the format names with <code>--list-formats</code></td></tr>
+<tr><td><code>ggt resolve [path] [--with strategy] [--ours] [--theirs] [--with-file file]</code></td><td>Resolve conflicts with ours, theirs, ancestor or delete, all of them when no path is given. <code>--with-file</code> stores one GeoJSON feature as the resolved feature</td></tr>
+<tr><td><code>ggt export &lt;ds&gt; &lt;path&gt; [--ref ref]</code></td><td>Export to GPKG/GeoJSON/CSV, from <code>ref</code> with its schema and CRS when given, or print the format names with <code>--list-formats</code></td></tr>
 <tr><td><code>ggt data ls|info|schema</code></td><td>Inspect datasets</td></tr>
 <tr><td><code>ggt files add|ls|rm</code></td><td>Manage versioned files</td></tr>
 <tr><td><code>ggt metadata set|show</code></td><td>Dataset XML metadata</td></tr>
@@ -312,7 +312,7 @@ ggt push origin master</pre>
 <tr><td>Feature-level diff</td><td>Working copy only</td></tr>
 <tr><td>Feature-aware merge</td><td>Not implemented, <code>git merge</code> on whole blobs</td></tr>
 <tr><td>Schema evolution</td><td>Not implemented</td></tr>
-<tr><td>Spatial filter</td><td>Stored, excludes nothing</td></tr>
+<tr><td>Spatial filter</td><td>Working copy only, bbox in the dataset's CRS</td></tr>
 <tr><td>File datasets</td><td>Yes</td></tr>
 <tr><td>XML metadata</td><td>Yes</td></tr>
 <tr><td>Licence tracking</td><td>Yes</td></tr>

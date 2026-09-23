@@ -243,6 +243,25 @@ fn test_import_gpkg_and_status() {
     assert!(stdout.contains("clean") || stdout.contains("On branch"));
 }
 
+#[test]
+fn test_hints_name_the_ggt_binary() {
+    let dir = tempdir("hints");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let (stdout, _, success) = run(&repo, &["status"]);
+    assert!(success);
+    assert!(stdout.contains("`ggt checkout`"), "status hint: {stdout}");
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    let (stdout, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "import failed: {stderr}");
+    assert!(stdout.contains("`ggt commit -m"), "import hint: {stdout}");
+}
+
 fn collect_feature_files(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
@@ -627,6 +646,53 @@ fn test_export_gpkg() {
         .query_row("SELECT COUNT(*) FROM cities", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 3);
+}
+
+#[test]
+fn test_export_from_a_ref_keeps_the_crs() {
+    let dir = tempdir("export-ref-crs");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["commit", "-m", "Import"]);
+
+    let crs_definition = |exported: &Path| -> String {
+        rusqlite::Connection::open(exported)
+            .unwrap()
+            .query_row(
+                "SELECT definition FROM gpkg_spatial_ref_sys WHERE srs_id = 4326",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    let from_working_tree = dir.path().join("working-tree.gpkg");
+    let (_, stderr, success) = run(
+        &repo,
+        &["export", "cities", from_working_tree.to_str().unwrap()],
+    );
+    assert!(success, "export failed: {stderr}");
+    let from_ref = dir.path().join("from-ref.gpkg");
+    let (_, stderr, success) = run(
+        &repo,
+        &[
+            "export",
+            "cities",
+            from_ref.to_str().unwrap(),
+            "--ref",
+            "HEAD",
+        ],
+    );
+    assert!(success, "export --ref failed: {stderr}");
+
+    assert_eq!(crs_definition(&from_working_tree), "GEOGCS[\"WGS 84\"]");
+    assert_eq!(crs_definition(&from_ref), "GEOGCS[\"WGS 84\"]");
 }
 
 // a .prj with no AUTHORITY, so the identifier and the srs id both come from the CRS name
@@ -1081,6 +1147,101 @@ fn test_resolve_ancestor_uses_merge_base() {
 }
 
 #[test]
+fn test_resolve_with_file_writes_an_encoded_feature() {
+    let dir = tempdir("resolve-with-file");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["commit", "-m", "Initial"]);
+
+    let edit_population_and_commit = |population: i64, message: &str| {
+        let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+        wc.execute(
+            "UPDATE cities SET population = ?1 WHERE fid = 1",
+            [population],
+        )
+        .unwrap();
+        drop(wc);
+        let (_, stderr, success) = run(&repo, &["commit", "-m", message]);
+        assert!(success, "commit failed: {stderr}");
+    };
+
+    run(&repo, &["branch", "feature"]);
+    run(&repo, &["switch", "feature"]);
+    edit_population_and_commit(1, "Feature edit");
+    run(&repo, &["switch", "master"]);
+    edit_population_and_commit(2, "Master edit");
+
+    let (stdout, _, _) = run(&repo, &["merge", "feature"]);
+    assert!(
+        stdout.to_lowercase().contains("conflict"),
+        "expected conflict: {stdout}"
+    );
+    let (stdout, _, _) = run(&repo, &["conflicts"]);
+    let conflict = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("cities/.table-dataset/feature/"))
+        .unwrap_or_else(|| panic!("no feature conflict listed: {stdout}"))
+        .to_string();
+
+    let resolution = dir.path().join("resolution.geojson");
+    fs::write(
+        &resolution,
+        r#"{"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [139.7, 35.7]},
+            "properties": {"fid": 1, "name": "Tokyo", "population": 3}}"#,
+    )
+    .unwrap();
+    let (_, stderr, success) = run(
+        &repo,
+        &[
+            "resolve",
+            &conflict,
+            "--with-file",
+            resolution.to_str().unwrap(),
+        ],
+    );
+    assert!(success, "resolve failed: {stderr}");
+
+    let feature = geogit_encoding::feature::StoredFeature::from_msgpack(
+        &fs::read(repo.join(&conflict)).unwrap(),
+    )
+    .expect("resolved feature is not a MessagePack feature");
+    let expected_geometry =
+        geogit_encoding::geometry::wkt_to_gpkg_bytes("POINT(139.7 35.7)").unwrap();
+    assert_eq!(
+        feature.values,
+        vec![
+            geogit_encoding::value::ColumnValue::Text("Tokyo".into()),
+            geogit_encoding::value::ColumnValue::Integer(3),
+            geogit_encoding::value::ColumnValue::Geometry(expected_geometry),
+        ]
+    );
+
+    let (_, stderr, success) = run(&repo, &["merge", "--continue", "feature"]);
+    assert!(success, "merge continue failed: {stderr}");
+    let json_path = dir.path().join("out.geojson");
+    let (_, stderr, success) = run(&repo, &["export", "cities", json_path.to_str().unwrap()]);
+    assert!(success, "export failed: {stderr}");
+    let exported: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+    let tokyo = exported["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["properties"]["name"] == "Tokyo")
+        .expect("Tokyo feature");
+    assert_eq!(tokyo["properties"]["population"], 3);
+    assert_eq!(tokyo["geometry"]["coordinates"][0], 139.7);
+}
+
+#[test]
 fn test_restore() {
     let dir = tempdir("restore");
     let repo = dir.path().join("repo");
@@ -1131,6 +1292,56 @@ fn test_spatial_filter_checkout() {
     assert!(filter_path.exists());
     let content = fs::read_to_string(&filter_path).unwrap();
     assert!(content.contains("0,0,1,1"));
+}
+
+#[test]
+fn test_spatial_filter_excludes_features_outside_the_bbox() {
+    let dir = tempdir("spatial-filter-excludes");
+    let repo = dir.path().join("repo");
+    // holds Tokyo, leaves out Delhi and Shanghai
+    run(
+        dir.path(),
+        &[
+            "init",
+            repo.to_str().unwrap(),
+            "--spatial-filter",
+            "130,30,140,40",
+        ],
+    );
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    let (_, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "import failed: {stderr}");
+
+    let working_copy = repo.join("repo.gpkg");
+    let working_copy_names = || -> Vec<String> {
+        rusqlite::Connection::open(&working_copy)
+            .unwrap()
+            .prepare("SELECT name FROM cities ORDER BY fid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|name| name.unwrap())
+            .collect()
+    };
+    assert_eq!(working_copy_names(), vec!["Tokyo".to_string()]);
+
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Import"]);
+    assert!(success, "commit failed: {stderr}");
+    let mut feature_files = Vec::new();
+    collect_feature_files(
+        &repo.join("cities/.table-dataset/feature"),
+        &mut feature_files,
+    );
+    assert_eq!(feature_files.len(), 3, "the tree keeps every feature");
+
+    fs::remove_file(&working_copy).unwrap();
+    let (_, stderr, success) = run(&repo, &["checkout"]);
+    assert!(success, "checkout failed: {stderr}");
+    assert_eq!(working_copy_names(), vec!["Tokyo".to_string()]);
 }
 
 #[test]
@@ -1225,6 +1436,59 @@ fn test_diff_working_copy_shows_values() {
     assert!(
         !csv.contains("Delhi"),
         "deleted feature still present: {csv}"
+    );
+}
+
+#[test]
+fn test_diff_filters_restrict_the_diff_to_named_datasets() {
+    let dir = tempdir("diff-filters");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    // a second table titled Cities would collide with the first in gpkg_contents
+    let towns_gpkg = dir.path().join("towns.gpkg");
+    create_test_gpkg(&towns_gpkg);
+    rusqlite::Connection::open(&towns_gpkg)
+        .unwrap()
+        .execute("UPDATE gpkg_contents SET identifier = 'Towns'", [])
+        .unwrap();
+    let towns_source = format!("GPKG:{}", towns_gpkg.display());
+    let (_, stderr, success) = run(&repo, &["import", &towns_source, "--name", "towns"]);
+    assert!(success, "import failed: {stderr}");
+    run(&repo, &["commit", "-m", "Initial"]);
+
+    let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    wc.execute_batch(
+        "UPDATE cities SET population = 1 WHERE fid = 1;
+         UPDATE towns SET population = 2 WHERE fid = 1;",
+    )
+    .unwrap();
+    drop(wc);
+
+    let (stdout, stderr, success) = run(&repo, &["diff", "--", "towns"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(stdout.contains("--- towns ---"), "towns missing: {stdout}");
+    assert!(
+        !stdout.contains("cities"),
+        "cities not filtered out: {stdout}"
+    );
+
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Edits"]);
+    assert!(success, "commit failed: {stderr}");
+    let (stdout, stderr, success) = run(&repo, &["diff", "HEAD~1", "HEAD", "--", "towns"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("towns/.table-dataset/feature/"),
+        "towns missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("cities"),
+        "cities not filtered out: {stdout}"
     );
 }
 
