@@ -576,11 +576,14 @@ fn read_crs_definitions(meta_dir: &Path) -> BTreeMap<String, String> {
         if path.extension().and_then(|e| e.to_str()) != Some("wkt") {
             continue;
         }
-        let Some(identifier) = path.file_stem().and_then(|s| s.to_str()) else {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
         if let Ok(definition) = std::fs::read_to_string(&path) {
-            definitions.insert(identifier.to_string(), definition);
+            definitions.insert(
+                geogit_encoding::crs::crs_identifier_from_file_stem(stem),
+                definition,
+            );
         }
     }
     definitions
@@ -593,12 +596,12 @@ fn read_crs_definitions_at(
 ) -> Result<BTreeMap<String, String>> {
     let mut definitions = BTreeMap::new();
     for file_name in repo.ls_tree(reference, crs_dir)? {
-        let Some(identifier) = file_name.strip_suffix(".wkt") else {
+        let Some(stem) = file_name.strip_suffix(".wkt") else {
             continue;
         };
         if let Some(definition) = repo.read_file_at(reference, &format!("{crs_dir}/{file_name}"))? {
             definitions.insert(
-                identifier.to_string(),
+                geogit_encoding::crs::crs_identifier_from_file_stem(stem),
                 String::from_utf8_lossy(&definition).into_owned(),
             );
         }

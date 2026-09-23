@@ -318,7 +318,7 @@ fn test_import_gpkg_writes_kart_geometry_and_crs() {
     let (_, stderr, success) = run(&repo, &["import", &source]);
     assert!(success, "import failed: {stderr}");
 
-    let crs_path = repo.join("cities/.table-dataset/meta/crs/EPSG:4326.wkt");
+    let crs_path = repo.join("cities/.table-dataset/meta/crs/EPSG%3A4326.wkt");
     assert!(crs_path.exists(), "no crs definition written");
     assert_eq!(fs::read_to_string(&crs_path).unwrap(), "GEOGCS[\"WGS 84\"]");
 

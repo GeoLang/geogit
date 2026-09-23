@@ -47,7 +47,8 @@ impl<'a> TreeBuilder<'a> {
         for (identifier, definition) in &meta.crs_definitions {
             let crs_dir = meta_dir.join("crs");
             std::fs::create_dir_all(&crs_dir).context("create crs dir")?;
-            std::fs::write(crs_dir.join(format!("{identifier}.wkt")), definition)
+            let stem = geogit_encoding::crs::crs_file_stem(identifier);
+            std::fs::write(crs_dir.join(format!("{stem}.wkt")), definition)
                 .with_context(|| format!("write crs {identifier}"))?;
         }
 

@@ -32,9 +32,45 @@ pub fn crs_organization(definition: &str) -> String {
     crs_authority(definition).0.unwrap_or("NONE").to_string()
 }
 
-/// The identifier a dataset stores the CRS under, as in `meta/crs/EPSG:4326.wkt`.
+/// The identifier a dataset stores the CRS under, `EPSG:4326` for `meta/crs/EPSG%3A4326.wkt`.
 pub fn crs_identifier(definition: &str) -> Option<String> {
     Some(identifier_string(definition)?.replace('/', "_"))
+}
+
+// windows refuses these in a file name, a colon names an ntfs stream
+const FILE_STEM_RESERVED_CHARACTERS: [char; 10] =
+    ['%', '<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
+pub fn crs_file_stem(identifier: &str) -> String {
+    let mut stem = String::with_capacity(identifier.len());
+    for character in identifier.chars() {
+        if FILE_STEM_RESERVED_CHARACTERS.contains(&character) {
+            stem.push_str(&format!("%{:02X}", character as u32));
+        } else {
+            stem.push(character);
+        }
+    }
+    stem
+}
+
+pub fn crs_identifier_from_file_stem(stem: &str) -> String {
+    let mut identifier = String::with_capacity(stem.len());
+    let mut characters = stem.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            identifier.push(character);
+            continue;
+        }
+        let hex: String = characters.by_ref().take(2).collect();
+        match u8::from_str_radix(&hex, 16) {
+            Ok(byte) => identifier.push(byte as char),
+            Err(_) => {
+                identifier.push('%');
+                identifier.push_str(&hex);
+            }
+        }
+    }
+    identifier
 }
 
 /// The srs id a GeoPackage working copy declares for the CRS, `None` when the
@@ -126,6 +162,15 @@ mod tests {
     fn test_srs_id_ignores_a_zero_authority_code() {
         let definition = "GEOGCS[\"Unnamed\",AUTHORITY[\"EPSG\",\"0\"]]";
         assert_eq!(crs_srs_id(definition), Some(205587));
+    }
+
+    #[test]
+    fn test_file_stem_round_trips_reserved_characters() {
+        assert_eq!(crs_file_stem("EPSG:4326"), "EPSG%3A4326");
+        assert_eq!(crs_identifier_from_file_stem("EPSG%3A4326"), "EPSG:4326");
+        let named = "50% off: a*b?c|d\"e<f>g\\h";
+        assert_eq!(crs_identifier_from_file_stem(&crs_file_stem(named)), named);
+        assert!(!crs_file_stem(named).contains(['<', '>', ':', '"', '/', '\\', '|', '?', '*']));
     }
 
     #[test]

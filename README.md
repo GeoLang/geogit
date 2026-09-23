@@ -84,7 +84,9 @@ GeoGit stores every feature row as a [MessagePack](https://msgpack.org/)-encoded
 blob inside a Git repository. The layout is modelled on
 [Kart](https://kartproject.org/)'s dataset v3. Geometry is a MessagePack
 extension of type 71 holding GeoPackage binary with srs id 0, and the CRS of a
-vector dataset is written to `meta/crs/<identifier>.wkt`.
+vector dataset is written to `meta/crs/<identifier>.wkt`. Characters Windows
+refuses in a file name are percent-encoded in the stem, so `EPSG:4326` is
+stored as `EPSG%3A4326.wkt`.
 
 A Shapefile import takes that identifier from the authority in the `.prj` file.
 A GeoPackage import names the file `EPSG:` plus the srs id the source table uses,

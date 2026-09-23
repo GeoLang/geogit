@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-23: the CRS file stem percent-encodes characters Windows refuses in
+  a file name, so `EPSG:4326` is stored as `meta/crs/EPSG%3A4326.wkt`. On
+  Windows the colon named an NTFS stream, exports lost the CRS, and git could
+  not check the tree out. Repos imported before this need a re-import.
 - 2026-09-23: `ggt resolve <path> --with-file` encodes the GeoJSON feature the
   way an import does, as a MessagePack feature with GeoPackage binary geometry.
   It used to write the GeoJSON text over the feature blob.
