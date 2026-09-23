@@ -20,6 +20,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-23: Importing a table whose title another dataset in the working copy
+  already uses keeps both tables. The second one takes its table name as its
+  GeoPackage identifier. It used to fail with "FOREIGN KEY constraint failed".
 - 2026-09-23: the CRS file stem percent-encodes characters Windows refuses in
   a file name, so `EPSG:4326` is stored as `meta/crs/EPSG%3A4326.wkt`. On
   Windows the colon named an NTFS stream, exports lost the CRS, and git could

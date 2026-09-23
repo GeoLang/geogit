@@ -271,9 +271,14 @@ impl WorkingCopy for GeoPackageWorkingCopy {
             Some(srs_id) if self.srs_id_is_registered(srs_id)? => Some(srs_id),
             _ => None,
         };
+        // REPLACE on an identifier another table holds deletes that table's row
         self.conn.execute(
             "INSERT OR REPLACE INTO gpkg_contents (table_name, data_type, identifier, srs_id)
-             VALUES (?1, 'features', ?2, ?3)",
+             VALUES (?1, 'features',
+                     CASE WHEN EXISTS (SELECT 1 FROM gpkg_contents
+                                       WHERE identifier = ?2 AND table_name != ?1)
+                          THEN ?1 ELSE ?2 END,
+                     ?3)",
             rusqlite::params![table_name, meta.title, contents_srs_id],
         )?;
 

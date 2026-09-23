@@ -244,6 +244,38 @@ fn test_import_gpkg_and_status() {
 }
 
 #[test]
+fn test_import_two_tables_with_the_same_identifier() {
+    let dir = tempdir("import-two-tables-same-identifier");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    let (_, stderr, success) = run(&repo, &["import", &source]);
+    assert!(success, "import failed: {stderr}");
+    let (_, stderr, success) = run(&repo, &["import", &source, "--name", "towns"]);
+    assert!(success, "second import failed: {stderr}");
+
+    let working_copy = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    let contents: Vec<(String, String, i32)> = working_copy
+        .prepare("SELECT table_name, identifier, srs_id FROM gpkg_contents ORDER BY table_name")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    assert_eq!(
+        contents,
+        [
+            ("cities".to_string(), "Cities".to_string(), 4326),
+            ("towns".to_string(), "towns".to_string(), 4326),
+        ]
+    );
+}
+
+#[test]
 fn test_hints_name_the_ggt_binary() {
     let dir = tempdir("hints");
     let repo = dir.path().join("repo");
