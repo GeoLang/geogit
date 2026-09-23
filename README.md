@@ -183,7 +183,7 @@ myproject/
 | `ggt status` | Show working copy changes |
 | `ggt diff [--stat] [-- DATASETS]` | Feature-level diff of the working copy |
 | `ggt diff <base> <target> [--stat] [-- DATASETS]` | Changed blob paths between two commits |
-| `ggt commit -m "msg" [datasets]` | Commit working copy changes, optionally only the named datasets |
+| `ggt commit -m "msg" [datasets]` | Commit working copy changes, optionally only the named datasets or `dataset:pk` features |
 | `ggt log [--oneline] [-n N]` | Show commit history |
 | `ggt show [commit]` | Show a commit |
 | `ggt branch [name] [-d]` | List, create or delete branches |

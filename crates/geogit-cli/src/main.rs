@@ -846,15 +846,33 @@ fn load_dataset_meta(root: &Path, ds: &str) -> Result<DatasetMeta> {
     })
 }
 
-fn sync_wc_to_tree(root: &Path, wc_gpkg: &Path, filter_datasets: &[String]) -> Result<()> {
+// the change tracker keys rows by CAST(pk AS TEXT), which leaves text unquoted
+fn tracked_pk_text(pk: &[ColumnValue]) -> String {
+    match pk {
+        [ColumnValue::Text(text)] => text.clone(),
+        _ => format_pk(pk),
+    }
+}
+
+fn sync_wc_to_tree(root: &Path, wc_gpkg: &Path, filters: &[String]) -> Result<()> {
     let wc = GeoPackageWorkingCopy::open(wc_gpkg)?;
     let datasets = wc.list_datasets()?;
 
     for ds in &datasets {
-        if !filter_datasets.is_empty() && !filter_datasets.iter().any(|f| ds.starts_with(f)) {
+        let selected_pks: Vec<Option<&str>> = filters
+            .iter()
+            .filter(|filter| filter_selects_dataset(filter, ds))
+            .map(|filter| filter.split_once(':').map(|(_, pk)| pk))
+            .collect();
+        if !filters.is_empty() && selected_pks.is_empty() {
             continue;
         }
-        let changes = wc.status(ds)?;
+        let commits_whole_dataset = filters.is_empty() || selected_pks.contains(&None);
+        let mut changes = wc.status(ds)?;
+        changes.retain(|delta| {
+            commits_whole_dataset
+                || selected_pks.contains(&Some(tracked_pk_text(delta.pk()).as_str()))
+        });
         if changes.is_empty() {
             continue;
         }
@@ -905,7 +923,13 @@ fn sync_wc_to_tree(root: &Path, wc_gpkg: &Path, filter_datasets: &[String]) -> R
                 }
             }
         }
-        wc.clear_tracking(ds)?;
+        if commits_whole_dataset {
+            wc.clear_tracking(ds)?;
+            continue;
+        }
+        for delta in &changes {
+            wc.clear_feature_tracking(ds, &tracked_pk_text(delta.pk()))?;
+        }
     }
     Ok(())
 }
@@ -1959,12 +1983,16 @@ fn cmd_show(commit: &str) -> Result<()> {
     Ok(())
 }
 
+fn filter_selects_dataset(filter: &str, path: &str) -> bool {
+    let dataset = filter.split(':').next().unwrap_or(filter);
+    path == dataset || path.starts_with(&format!("{dataset}/"))
+}
+
 fn matches_diff_filters(filters: &[String], path: &str) -> bool {
     filters.is_empty()
-        || filters.iter().any(|filter| {
-            let dataset = filter.split(':').next().unwrap_or(filter);
-            path == dataset || path.starts_with(&format!("{dataset}/"))
-        })
+        || filters
+            .iter()
+            .any(|filter| filter_selects_dataset(filter, path))
 }
 
 fn cmd_diff(base: &str, target: Option<&str>, stat: bool, filters: &[String]) -> Result<()> {

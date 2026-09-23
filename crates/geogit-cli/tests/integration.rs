@@ -897,6 +897,116 @@ fn test_selective_commit() {
 }
 
 #[test]
+fn test_commit_filter_names_a_dataset() {
+    let dir = tempdir("commit-filter-dataset");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["import", &source, "--name", "cities_copy"]);
+    run(&repo, &["commit", "-m", "Initial"]);
+
+    let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    wc.execute_batch(
+        "UPDATE cities SET population = 1 WHERE fid = 1;
+         UPDATE cities_copy SET population = 2 WHERE fid = 1;",
+    )
+    .unwrap();
+    drop(wc);
+
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Cities only", "cities"]);
+    assert!(success, "commit failed: {stderr}");
+
+    let (stdout, stderr, success) = run(&repo, &["diff", "HEAD~1", "HEAD"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("cities/.table-dataset/feature/"),
+        "cities not committed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("cities_copy"),
+        "cities_copy committed: {stdout}"
+    );
+
+    let (stdout, stderr, success) = run(&repo, &["diff"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("--- cities_copy ---"),
+        "cities_copy edit lost: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--- cities ---"),
+        "cities still pending: {stdout}"
+    );
+}
+
+#[test]
+fn test_commit_filter_names_a_feature() {
+    let dir = tempdir("commit-filter-feature");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["commit", "-m", "Initial"]);
+
+    let wc = rusqlite::Connection::open(repo.join("repo.gpkg")).unwrap();
+    wc.execute_batch(
+        "UPDATE cities SET population = 1 WHERE fid = 1;
+         UPDATE cities SET population = 2 WHERE fid = 2;",
+    )
+    .unwrap();
+    drop(wc);
+
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Tokyo only", "cities:1"]);
+    assert!(success, "commit failed: {stderr}");
+
+    let json_path = dir.path().join("committed.geojson");
+    let (_, stderr, success) = run(
+        &repo,
+        &[
+            "export",
+            "cities",
+            json_path.to_str().unwrap(),
+            "--ref",
+            "HEAD",
+        ],
+    );
+    assert!(success, "export failed: {stderr}");
+    let exported: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+    let committed_population = |name: &str| {
+        exported["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|feature| feature["properties"]["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {exported}"))["properties"]["population"]
+            .clone()
+    };
+    assert_eq!(committed_population("Tokyo"), 1);
+    assert_eq!(committed_population("Delhi"), 11034555);
+
+    let (stdout, stderr, success) = run(&repo, &["diff"]);
+    assert!(success, "diff failed: {stderr}");
+    assert!(
+        stdout.contains("population: 11034555 → 2"),
+        "Delhi edit lost: {stdout}"
+    );
+    assert!(
+        !stdout.contains("13960000"),
+        "Tokyo edit still pending: {stdout}"
+    );
+}
+
+#[test]
 fn test_remote_operations() {
     let dir = tempdir("remote");
     let repo = dir.path().join("repo");

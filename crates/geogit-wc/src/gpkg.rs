@@ -103,6 +103,14 @@ impl GeoPackageWorkingCopy {
         Ok(())
     }
 
+    pub fn clear_feature_tracking(&self, dataset_path: &str, pk: &str) -> Result<()> {
+        let table_name = dataset_path.replace('/', "_");
+        self.tracker
+            .clear_feature(&self.conn, &table_name, pk)
+            .context("failed to clear feature tracking")?;
+        Ok(())
+    }
+
     /// Map a GeoGit data type to a SQLite/GeoPackage column type.
     fn sql_type(col: &Column) -> &'static str {
         match col.data_type {

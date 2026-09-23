@@ -185,6 +185,21 @@ impl ChangeTracker {
         )?;
         Ok(())
     }
+
+    pub fn clear_feature(
+        &self,
+        conn: &Connection,
+        table_name: &str,
+        pk: &str,
+    ) -> rusqlite::Result<()> {
+        for table in [&self.tracking_table, &self.old_values_table] {
+            conn.execute(
+                &format!("DELETE FROM {table} WHERE table_name = ?1 AND pk = ?2"),
+                [table_name, pk],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// A tracked change from the tracking table.

@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-23: `ggt commit -m msg dataset:pk` commits only that feature and
+  leaves the dataset's other edits pending, and a bare `dataset` no longer also
+  selects every dataset whose name starts with it. A `dataset:pk` filter used
+  to commit nothing.
 - 2026-09-23: Importing a table whose title another dataset in the working copy
   already uses keeps both tables. The second one takes its table name as its
   GeoPackage identifier. It used to fail with "FOREIGN KEY constraint failed".
