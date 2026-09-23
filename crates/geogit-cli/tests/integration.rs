@@ -1648,7 +1648,6 @@ fn test_diff_filters_restrict_the_diff_to_named_datasets() {
     create_test_gpkg(&gpkg);
     let source = format!("GPKG:{}", gpkg.display());
     run(&repo, &["import", &source]);
-    // a second table titled Cities would collide with the first in gpkg_contents
     let towns_gpkg = dir.path().join("towns.gpkg");
     create_test_gpkg(&towns_gpkg);
     rusqlite::Connection::open(&towns_gpkg)
