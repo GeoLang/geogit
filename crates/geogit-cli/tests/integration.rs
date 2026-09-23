@@ -727,6 +727,62 @@ fn test_export_from_a_ref_keeps_the_crs() {
     assert_eq!(crs_definition(&from_ref), "GEOGCS[\"WGS 84\"]");
 }
 
+#[test]
+fn test_export_from_a_ref_leaves_the_working_tree_alone() {
+    let dir = tempdir("export-ref-working-tree");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    let description_path = repo.join("cities/.table-dataset/meta/description");
+    fs::write(&description_path, "World cities").unwrap();
+    run(&repo, &["commit", "-m", "Import"]);
+
+    fs::write(&description_path, "Uncommitted description").unwrap();
+    let removed_feature = find_feature_file(&repo.join("cities/.table-dataset/feature"));
+    fs::remove_file(&removed_feature).unwrap();
+
+    let exported = dir.path().join("from-ref.gpkg");
+    let (_, stderr, success) = run(
+        &repo,
+        &[
+            "export",
+            "cities",
+            exported.to_str().unwrap(),
+            "--ref",
+            "HEAD",
+        ],
+    );
+    assert!(success, "export --ref failed: {stderr}");
+
+    assert_eq!(
+        fs::read_to_string(&description_path).unwrap(),
+        "Uncommitted description"
+    );
+    assert!(
+        !removed_feature.exists(),
+        "export --ref restored a removed feature"
+    );
+
+    let exported = rusqlite::Connection::open(&exported).unwrap();
+    let feature_count: i64 = exported
+        .query_row("SELECT count(*) FROM cities", [], |row| row.get(0))
+        .unwrap();
+    let description: String = exported
+        .query_row(
+            "SELECT description FROM gpkg_contents WHERE table_name = 'cities'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(feature_count, 3);
+    assert_eq!(description, "World cities");
+}
+
 // a .prj with no AUTHORITY, so the identifier and the srs id both come from the CRS name
 const PROJECTION_WITHOUT_AUTHORITY: &str = concat!(
     "PROJCS[\"NZGD2000 / New Zealand Transverse Mercator 2000\",",

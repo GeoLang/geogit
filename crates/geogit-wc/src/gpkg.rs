@@ -281,13 +281,14 @@ impl WorkingCopy for GeoPackageWorkingCopy {
         };
         // REPLACE on an identifier another table holds deletes that table's row
         self.conn.execute(
-            "INSERT OR REPLACE INTO gpkg_contents (table_name, data_type, identifier, srs_id)
+            "INSERT OR REPLACE INTO gpkg_contents
+             (table_name, data_type, identifier, description, srs_id)
              VALUES (?1, 'features',
                      CASE WHEN EXISTS (SELECT 1 FROM gpkg_contents
                                        WHERE identifier = ?2 AND table_name != ?1)
                           THEN ?1 ELSE ?2 END,
-                     ?3)",
-            rusqlite::params![table_name, meta.title, contents_srs_id],
+                     ?3, ?4)",
+            rusqlite::params![table_name, meta.title, meta.description, contents_srs_id],
         )?;
 
         // Register geometry column

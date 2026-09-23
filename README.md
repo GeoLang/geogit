@@ -198,7 +198,7 @@ myproject/
 | `ggt create-workingcopy <path>` | Create the GeoPackage working copy at `<path>` |
 | `ggt conflicts [ls\|abort]` | List merge conflicts or abort the merge |
 | `ggt resolve [path] [--with STRATEGY] [--ours] [--theirs] [--with-file FILE]` | Resolve conflicts, all of them when no path is given. `--with-file` needs a feature path and a GeoJSON feature |
-| `ggt export <ds> <path> [--ref REF]` | Export to GPKG, GeoJSON or CSV. `--ref` reads the schema, CRS and features from `REF`. `--list-formats` prints the format names |
+| `ggt export <ds> <path> [--ref REF]` | Export to GPKG, GeoJSON or CSV. `--ref` reads the schema, CRS, description and features from `REF` and leaves the working tree alone. `--list-formats` prints the format names |
 | `ggt data ls\|info\|schema` | Inspect datasets |
 | `ggt files add\|ls\|rm` | Manage versioned files |
 | `ggt metadata set\|show` | Dataset XML metadata |

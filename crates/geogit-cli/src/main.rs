@@ -709,49 +709,101 @@ fn load_legends(legend_dir: &Path) -> Result<HashMap<String, Legend>> {
     Ok(legends)
 }
 
+fn load_legends_at(
+    repo: &Repository,
+    reference: &str,
+    legend_dir: &str,
+) -> Result<HashMap<String, Legend>> {
+    let mut legends = HashMap::new();
+    for hash in repo.ls_tree(reference, legend_dir)? {
+        let data = repo
+            .read_file_at(reference, &format!("{legend_dir}/{hash}"))?
+            .with_context(|| format!("read legend {hash} at {reference}"))?;
+        let legend = Legend::from_msgpack(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
+        legends.insert(hash, legend);
+    }
+    Ok(legends)
+}
+
+fn load_features_at(
+    repo: &Repository,
+    reference: &str,
+    dataset: &str,
+    meta: &DatasetMeta,
+) -> Result<Vec<FeatureRow>> {
+    let legends = load_legends_at(
+        repo,
+        reference,
+        &format!("{dataset}/.table-dataset/meta/legend"),
+    )?;
+    let feature_dir = format!("{dataset}/.table-dataset/feature");
+    let mut features = Vec::new();
+    for relative_path in repo.ls_tree_recursive(reference, &feature_dir)? {
+        let data = repo
+            .read_file_at(reference, &format!("{feature_dir}/{relative_path}"))?
+            .with_context(|| format!("read feature {relative_path} at {reference}"))?;
+        let file_name = relative_path.rsplit('/').next().unwrap_or(&relative_path);
+        if let Some(feature) = decode_feature_file(file_name, &data, &legends, &meta.schema)? {
+            features.push(feature);
+        }
+    }
+    Ok(features)
+}
+
+fn decode_feature_file(
+    file_name: &str,
+    data: &[u8],
+    legends: &HashMap<String, Legend>,
+    schema: &Schema,
+) -> Result<Option<FeatureRow>> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE};
+    let pk_cols: Vec<&Column> = schema
+        .0
+        .iter()
+        .filter(|c| c.primary_key_index.is_some())
+        .collect();
+    let feature = StoredFeature::from_msgpack(data).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let Some(legend) = legends.get(&feature.legend_hash) else {
+        return Ok(None);
+    };
+    let mut values = legend.decode_values(&feature.values, schema);
+    // Decode PK from filename (base64-encoded msgpack)
+    let pk: Vec<ColumnValue> = if let Ok(pk_bytes) = URL_SAFE.decode(file_name.as_bytes()) {
+        if let Ok(pk_vals) = rmp_serde::from_slice::<Vec<ColumnValue>>(&pk_bytes) {
+            // Add PK values to the values map
+            for (i, col) in pk_cols.iter().enumerate() {
+                if i < pk_vals.len() {
+                    values.insert(col.name.clone(), pk_vals[i].clone());
+                }
+            }
+            pk_vals
+        } else {
+            vec![ColumnValue::Null; pk_cols.len()]
+        }
+    } else {
+        vec![ColumnValue::Null; pk_cols.len()]
+    };
+    Ok(Some((pk, values)))
+}
+
 fn walk_feature_files(
     dir: &Path,
     legends: &HashMap<String, Legend>,
     schema: &Schema,
     out: &mut Vec<FeatureRow>,
 ) -> Result<()> {
-    use base64::{Engine, engine::general_purpose::URL_SAFE};
     if !dir.exists() {
         return Ok(());
     }
-    let pk_cols: Vec<&Column> = schema
-        .0
-        .iter()
-        .filter(|c| c.primary_key_index.is_some())
-        .collect();
     for entry in std::fs::read_dir(dir)?.flatten() {
         let path = entry.path();
         if path.is_dir() {
             walk_feature_files(&path, legends, schema, out)?;
         } else {
             let data = std::fs::read(&path)?;
-            let feature = StoredFeature::from_msgpack(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
-            if let Some(legend) = legends.get(&feature.legend_hash) {
-                let mut values = legend.decode_values(&feature.values, schema);
-                // Decode PK from filename (base64-encoded msgpack)
-                let filename = path.file_name().unwrap().to_string_lossy();
-                let pk: Vec<ColumnValue> =
-                    if let Ok(pk_bytes) = URL_SAFE.decode(filename.as_bytes()) {
-                        if let Ok(pk_vals) = rmp_serde::from_slice::<Vec<ColumnValue>>(&pk_bytes) {
-                            // Add PK values to the values map
-                            for (i, col) in pk_cols.iter().enumerate() {
-                                if i < pk_vals.len() {
-                                    values.insert(col.name.clone(), pk_vals[i].clone());
-                                }
-                            }
-                            pk_vals
-                        } else {
-                            vec![ColumnValue::Null; pk_cols.len()]
-                        }
-                    } else {
-                        vec![ColumnValue::Null; pk_cols.len()]
-                    };
-                out.push((pk, values));
+            let file_name = path.file_name().unwrap().to_string_lossy();
+            if let Some(feature) = decode_feature_file(&file_name, &data, legends, schema)? {
+                out.push(feature);
             }
         }
     }
@@ -2489,6 +2541,12 @@ fn cmd_export(
         let title_data = repo
             .read_file_at(ref_name, &format!("{dataset}/.table-dataset/meta/title"))?
             .unwrap_or_default();
+        let description_data = repo
+            .read_file_at(
+                ref_name,
+                &format!("{dataset}/.table-dataset/meta/description"),
+            )?
+            .unwrap_or_default();
         let ps_data = repo.read_file_at(
             ref_name,
             &format!("{dataset}/.table-dataset/meta/path-structure.json"),
@@ -2500,7 +2558,9 @@ fn cmd_export(
         };
         let meta = DatasetMeta {
             title: String::from_utf8_lossy(&title_data).trim().to_string(),
-            description: String::new(),
+            description: String::from_utf8_lossy(&description_data)
+                .trim()
+                .to_string(),
             schema,
             path_structure: ps,
             crs_definitions: read_crs_definitions_at(
@@ -2509,14 +2569,7 @@ fn cmd_export(
                 &format!("{dataset}/.table-dataset/meta/crs"),
             )?,
         };
-        // For ref-based export, we need to checkout to a temp dir
-        let tmp = std::env::temp_dir().join(format!("geogit-export-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp)?;
-        repo.checkout_path(ref_name, &format!("{dataset}/.table-dataset"))?;
-        let feature_dir = root.join(dataset).join(".table-dataset/feature");
-        let features = load_features_from_tree(&feature_dir, &meta)?;
-        // Restore original state
-        let _ = repo.checkout_path("HEAD", &format!("{dataset}/.table-dataset"));
+        let features = load_features_at(&repo, ref_name, dataset, &meta)?;
         (meta, features)
     } else {
         let meta = load_dataset_meta(&root, dataset)?;

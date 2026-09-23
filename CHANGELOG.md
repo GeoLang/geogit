@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-09-23: `ggt export --ref` reads the features and legends straight from
+  git and never touches the working tree, and exports carry the dataset
+  description in `gpkg_contents`. It used to check the ref out over the
+  dataset and back to HEAD, which threw away uncommitted edits to it.
 - 2026-09-23: `ggt commit -m msg dataset:pk` commits only that feature and
   leaves the dataset's other edits pending, and a bare `dataset` no longer also
   selects every dataset whose name starts with it. A `dataset:pk` filter used
