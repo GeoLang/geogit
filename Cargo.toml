@@ -32,7 +32,7 @@ rusqlite = { version = "0.34", features = ["bundled", "blob", "functions"] }
 # Geometry
 geo = "0.29"
 wkb = "0.7"
-geozero = { version = "0.14", features = ["with-wkb", "with-geo"] }
+geozero = { version = "0.15", features = ["with-wkb", "with-geo"] }
 
 # Databases
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
