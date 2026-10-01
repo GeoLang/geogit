@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -153,11 +154,17 @@ impl Repository {
             .context("failed to run git commit")?;
 
         if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("nothing to commit") {
+            if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
                 return Ok("nothing to commit".into());
             }
-            bail!("git commit failed: {stderr}");
+            let reason = if stderr.trim().is_empty() {
+                stdout
+            } else {
+                stderr
+            };
+            bail!("git commit failed: {reason}");
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -393,6 +400,66 @@ impl Repository {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn read_files_at(&self, commit: &str, paths: &[String]) -> Result<Vec<Option<Vec<u8>>>> {
+        // paths with spaces work because the default format reads the whole line as the object name
+        let mut child = Command::new("git")
+            .args(["cat-file", "--batch"])
+            .current_dir(&self.workdir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("failed to run git cat-file --batch")?;
+
+        let requests: String = paths
+            .iter()
+            .map(|path| format!("{commit}:{path}\n"))
+            .collect();
+        let mut stdin = child.stdin.take().context("git cat-file has no stdin")?;
+        let writer = std::thread::spawn(move || stdin.write_all(requests.as_bytes()));
+        let output = child
+            .wait_with_output()
+            .context("failed to read git cat-file output")?;
+        writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("git cat-file writer thread panicked"))?
+            .context("failed to write to git cat-file")?;
+
+        if !output.status.success() {
+            bail!(
+                "git cat-file failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let mut remaining = output.stdout.as_slice();
+        let mut blobs = Vec::with_capacity(paths.len());
+        for path in paths {
+            let header_end = remaining
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .with_context(|| format!("git cat-file reply for {path} has no header"))?;
+            let header = std::str::from_utf8(&remaining[..header_end])
+                .with_context(|| format!("git cat-file header for {path} is not utf-8"))?;
+            remaining = &remaining[header_end + 1..];
+            if header.ends_with(" missing") {
+                blobs.push(None);
+                continue;
+            }
+            let size: usize = header
+                .rsplit(' ')
+                .next()
+                .and_then(|size| size.parse().ok())
+                .with_context(|| format!("unexpected git cat-file header for {path}: {header}"))?;
+            if remaining.len() < size + 1 {
+                bail!("git cat-file reply for {path} is shorter than {size} bytes");
+            }
+            blobs.push(Some(remaining[..size].to_vec()));
+            remaining = &remaining[size + 1..];
+        }
+        Ok(blobs)
     }
 
     /// List tree entries at a path within a commit.

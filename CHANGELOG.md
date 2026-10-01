@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 2026-10-01: `ggt export --ref` reads every feature and legend through one
+  `git cat-file --batch` process instead of one `git show` per file. CSV export
+  writes text cells as they are, without added quotes or a 50 byte cut, and the
+  shortened text in diff and show no longer panics on a multibyte character. A
+  commit with no changes prints "nothing to commit" instead of an empty error.
 - 2026-09-23: `ggt export --ref` reads the features and legends straight from
   git and never touches the working tree, and exports carry the dataset
   description in `gpkg_contents`. It used to check the ref out over the

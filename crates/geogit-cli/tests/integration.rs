@@ -459,6 +459,27 @@ fn test_commit_and_log() {
 }
 
 #[test]
+fn test_commit_with_no_changes_says_nothing_to_commit() {
+    let dir = tempdir("commit-nothing");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    let (_, stderr, success) = run(&repo, &["commit", "-m", "Import"]);
+    assert!(success, "commit failed: {stderr}");
+
+    let (stdout, stderr, _) = run(&repo, &["commit", "-m", "Again"]);
+    assert!(
+        stdout.contains("nothing to commit") || stderr.contains("nothing to commit"),
+        "second commit output: {stdout} {stderr}"
+    );
+}
+
+#[test]
 fn test_show() {
     let dir = tempdir("show");
     let repo = dir.path().join("repo");
@@ -781,6 +802,88 @@ fn test_export_from_a_ref_leaves_the_working_tree_alone() {
         .unwrap();
     assert_eq!(feature_count, 3);
     assert_eq!(description, "World cities");
+}
+
+#[test]
+fn test_export_from_a_ref_returns_every_feature() {
+    let dir = tempdir("export-ref-every-feature");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+    run(&repo, &["commit", "-m", "Import"]);
+
+    let from_working_tree = dir.path().join("working-tree.csv");
+    let (_, stderr, success) = run(
+        &repo,
+        &["export", "cities", from_working_tree.to_str().unwrap()],
+    );
+    assert!(success, "export failed: {stderr}");
+    let from_ref = dir.path().join("from-ref.csv");
+    let (_, stderr, success) = run(
+        &repo,
+        &[
+            "export",
+            "cities",
+            from_ref.to_str().unwrap(),
+            "--ref",
+            "HEAD",
+        ],
+    );
+    assert!(success, "export --ref failed: {stderr}");
+
+    let sorted_lines = |path: &Path| -> Vec<String> {
+        let mut lines: Vec<String> = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        lines.sort();
+        lines
+    };
+    let ref_lines = sorted_lines(&from_ref);
+    assert_eq!(
+        ref_lines.len(),
+        4,
+        "header plus three features: {ref_lines:?}"
+    );
+    assert_eq!(ref_lines, sorted_lines(&from_working_tree));
+}
+
+#[test]
+fn test_export_csv_keeps_long_text_with_commas() {
+    let dir = tempdir("export-csv-long-text");
+    let repo = dir.path().join("repo");
+    run(dir.path(), &["init", repo.to_str().unwrap()]);
+    setup_git_config(&repo);
+
+    let long_name = "Tokyo, the capital of Japan, home to more than thirteen million people";
+    let gpkg = dir.path().join("data.gpkg");
+    create_test_gpkg(&gpkg);
+    rusqlite::Connection::open(&gpkg)
+        .unwrap()
+        .execute("UPDATE cities SET name = ?1 WHERE fid = 1", [long_name])
+        .unwrap();
+    let source = format!("GPKG:{}", gpkg.display());
+    run(&repo, &["import", &source]);
+
+    let csv_path = dir.path().join("output.csv");
+    let (_, stderr, success) = run(&repo, &["export", "cities", csv_path.to_str().unwrap()]);
+    assert!(success, "export failed: {stderr}");
+
+    let csv_content = fs::read_to_string(&csv_path).unwrap();
+    let tokyo_row = csv_content
+        .lines()
+        .find(|line| line.starts_with("1,"))
+        .expect("Tokyo row");
+    assert!(
+        tokyo_row.starts_with(&format!("1,\"{long_name}\",13960000,")),
+        "unexpected row: {tokyo_row}"
+    );
 }
 
 // a .prj with no AUTHORITY, so the identifier and the srs id both come from the CRS name

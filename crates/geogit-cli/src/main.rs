@@ -679,7 +679,8 @@ fn format_value(v: &ColumnValue) -> String {
         ColumnValue::Float(f) => f.to_string(),
         ColumnValue::Text(s) => {
             if s.len() > 50 {
-                format!("\"{}...\"", &s[..47])
+                let cut = (0..=47).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+                format!("\"{}...\"", &s[..cut])
             } else {
                 format!("\"{s}\"")
             }
@@ -714,11 +715,15 @@ fn load_legends_at(
     reference: &str,
     legend_dir: &str,
 ) -> Result<HashMap<String, Legend>> {
+    let hashes = repo.ls_tree(reference, legend_dir)?;
+    let paths: Vec<String> = hashes
+        .iter()
+        .map(|hash| format!("{legend_dir}/{hash}"))
+        .collect();
+    let blobs = repo.read_files_at(reference, &paths)?;
     let mut legends = HashMap::new();
-    for hash in repo.ls_tree(reference, legend_dir)? {
-        let data = repo
-            .read_file_at(reference, &format!("{legend_dir}/{hash}"))?
-            .with_context(|| format!("read legend {hash} at {reference}"))?;
+    for (hash, data) in hashes.into_iter().zip(blobs) {
+        let data = data.with_context(|| format!("read legend {hash} at {reference}"))?;
         let legend = Legend::from_msgpack(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
         legends.insert(hash, legend);
     }
@@ -737,11 +742,15 @@ fn load_features_at(
         &format!("{dataset}/.table-dataset/meta/legend"),
     )?;
     let feature_dir = format!("{dataset}/.table-dataset/feature");
+    let relative_paths = repo.ls_tree_recursive(reference, &feature_dir)?;
+    let paths: Vec<String> = relative_paths
+        .iter()
+        .map(|relative_path| format!("{feature_dir}/{relative_path}"))
+        .collect();
+    let blobs = repo.read_files_at(reference, &paths)?;
     let mut features = Vec::new();
-    for relative_path in repo.ls_tree_recursive(reference, &feature_dir)? {
-        let data = repo
-            .read_file_at(reference, &format!("{feature_dir}/{relative_path}"))?
-            .with_context(|| format!("read feature {relative_path} at {reference}"))?;
+    for (relative_path, data) in relative_paths.into_iter().zip(blobs) {
+        let data = data.with_context(|| format!("read feature {relative_path} at {reference}"))?;
         let file_name = relative_path.rsplit('/').next().unwrap_or(&relative_path);
         if let Some(feature) = decode_feature_file(file_name, &data, &legends, &meta.schema)? {
             features.push(feature);
@@ -2659,12 +2668,19 @@ fn export_csv(path: &Path, meta: &DatasetMeta, features: &[FeatureRow]) -> Resul
             .schema
             .0
             .iter()
-            .map(|c| values.get(&c.name).map(format_value).unwrap_or_default())
+            .map(|c| values.get(&c.name).map(format_csv_cell).unwrap_or_default())
             .collect();
         writer.write_record(&row)?;
     }
     writer.flush()?;
     Ok(())
+}
+
+fn format_csv_cell(value: &ColumnValue) -> String {
+    match value {
+        ColumnValue::Text(text) => text.clone(),
+        other => format_value(other),
+    }
 }
 
 fn export_geojson(path: &Path, meta: &DatasetMeta, features: &[FeatureRow]) -> Result<()> {
