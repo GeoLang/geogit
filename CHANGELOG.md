@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- 2026-11-04: CI and the release workflow call the reusable workflows in
+  `GeoLang/.github`. The `ggt-<target>.tar.gz` archives are unchanged.
 - 2026-09-16: Public docs match the code. The README says which import names the
   CRS file from the WKT authority and which names it from the source table's srs
   id, and how the working copy picks the srs id it stamps into geometry headers.
